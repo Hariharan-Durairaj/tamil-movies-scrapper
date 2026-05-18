@@ -26,6 +26,7 @@ services:
       args:
         REPO_URL: https://github.com/Hariharan-Durairaj/tamil-movies-scrapper.git
         REPO_BRANCH: main
+        CACHE_BUST: ${CACHE_BUST:-default}
     container_name: movie_backend
     restart: unless-stopped
     depends_on:

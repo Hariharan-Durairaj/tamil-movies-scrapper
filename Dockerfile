@@ -11,9 +11,12 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
     xvfb \
     && rm -rf /var/lib/apt/lists/*
 
-# Clone the latest code from GitHub
+# Clone the latest code from GitHub.
+# CACHE_BUST changes every build (pass via docker-compose or --build-arg)
+# so Docker never reuses this layer, guaranteeing a fresh pull.
 ARG REPO_URL=https://github.com/Hariharan-Durairaj/tamil-movies-scrapper.git
 ARG REPO_BRANCH=main
+ARG CACHE_BUST
 RUN git clone --depth 1 --branch ${REPO_BRANCH} ${REPO_URL} /app
 
 WORKDIR /app
