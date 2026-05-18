@@ -21,7 +21,11 @@ services:
 
   # ── FastAPI backend ───────────────────────────────────────────────────────
   backend:
-    build: .
+    build:
+      context: .
+      args:
+        REPO_URL: https://github.com/Hariharan-Durairaj/tamil-movies-scrapper.git
+        REPO_BRANCH: main
     container_name: movie_backend
     restart: unless-stopped
     depends_on:
