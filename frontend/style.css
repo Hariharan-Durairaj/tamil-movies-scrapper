@@ -1,0 +1,801 @@
+:root {
+    --primary-color: #2563eb;
+    --primary-hover: #1d4ed8;
+    --secondary-color: #64748b;
+    --success-color: #10b981;
+    --danger-color: #ef4444;
+    --warning-color: #f59e0b;
+    --bg-color: #0f172a;
+    --bg-secondary: #1e293b;
+    --bg-card: #334155;
+    --text-primary: #f1f5f9;
+    --text-secondary: #cbd5e1;
+    --border-color: #475569;
+}
+
+* {
+    margin: 0;
+    padding: 0;
+    box-sizing: border-box;
+}
+
+body {
+    font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, Oxygen, Ubuntu, Cantarell, sans-serif;
+    background-color: var(--bg-color);
+    color: var(--text-primary);
+    line-height: 1.6;
+}
+
+.screen {
+    min-height: 100vh;
+}
+
+.hidden {
+    display: none !important;
+}
+
+/* Auth Screen */
+.auth-container {
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    justify-content: center;
+    min-height: 100vh;
+    padding: 20px;
+}
+
+.auth-container h1 {
+    font-size: 3rem;
+    margin-bottom: 2rem;
+    background: linear-gradient(135deg, var(--primary-color), #8b5cf6);
+    -webkit-background-clip: text;
+    -webkit-text-fill-color: transparent;
+    background-clip: text;
+}
+
+#auth-form {
+    background: var(--bg-secondary);
+    padding: 2rem;
+    border-radius: 12px;
+    box-shadow: 0 20px 60px rgba(0, 0, 0, 0.5);
+    width: 100%;
+    max-width: 400px;
+}
+
+#auth-form input {
+    width: 100%;
+    padding: 12px;
+    margin-bottom: 1rem;
+    border: 1px solid var(--border-color);
+    border-radius: 6px;
+    background: var(--bg-card);
+    color: var(--text-primary);
+    font-size: 1rem;
+}
+
+#auth-form input:focus {
+    outline: none;
+    border-color: var(--primary-color);
+}
+
+.error-message {
+    color: var(--danger-color);
+    font-size: 0.9rem;
+    margin-top: 0.5rem;
+}
+
+/* Navigation */
+.navbar {
+    background: var(--bg-secondary);
+    padding: 1rem 2rem;
+    display: flex;
+    justify-content: space-between;
+    align-items: center;
+    box-shadow: 0 2px 10px rgba(0, 0, 0, 0.3);
+}
+
+.nav-brand {
+    font-size: 1.5rem;
+    font-weight: bold;
+}
+
+.nav-links {
+    display: flex;
+    gap: 2rem;
+}
+
+.nav-link {
+    color: var(--text-secondary);
+    text-decoration: none;
+    padding: 0.5rem 1rem;
+    border-radius: 6px;
+    transition: all 0.2s;
+}
+
+.nav-link:hover {
+    color: var(--text-primary);
+    background: var(--bg-card);
+}
+
+.nav-link.active {
+    color: var(--text-primary);
+    background: var(--primary-color);
+}
+
+/* Container */
+.container {
+    max-width: 1400px;
+    margin: 0 auto;
+    padding: 2rem;
+}
+
+/* Pages */
+.page {
+    display: none;
+}
+
+.page.active {
+    display: block;
+}
+
+.page h2 {
+    font-size: 2rem;
+    margin-bottom: 2rem;
+}
+
+/* Buttons */
+.btn-primary,
+.btn-secondary,
+.btn-danger,
+.btn-test {
+    padding: 12px 24px;
+    border: none;
+    border-radius: 6px;
+    font-size: 1rem;
+    cursor: pointer;
+    transition: all 0.2s;
+    font-weight: 500;
+}
+
+.btn-primary {
+    background: var(--primary-color);
+    color: white;
+}
+
+.btn-primary:hover {
+    background: var(--primary-hover);
+    transform: translateY(-2px);
+}
+
+.btn-secondary {
+    background: var(--secondary-color);
+    color: white;
+}
+
+.btn-secondary:hover {
+    background: #475569;
+}
+
+.btn-danger {
+    background: var(--danger-color);
+    color: white;
+}
+
+.btn-danger:hover {
+    background: #dc2626;
+}
+
+.btn-test {
+    background: var(--success-color);
+    color: white;
+    padding: 8px 16px;
+    font-size: 0.9rem;
+}
+
+.btn-test:hover {
+    background: #059669;
+}
+
+.btn-large {
+    padding: 16px 32px;
+    font-size: 1.1rem;
+    margin-top: 2rem;
+}
+
+/* Stats Grid */
+.stats-grid {
+    display: grid;
+    grid-template-columns: repeat(auto-fit, minmax(200px, 1fr));
+    gap: 1.5rem;
+    margin-bottom: 2rem;
+}
+
+.stat-card {
+    background: var(--bg-secondary);
+    padding: 1.5rem;
+    border-radius: 12px;
+    text-align: center;
+    box-shadow: 0 4px 6px rgba(0, 0, 0, 0.3);
+}
+
+.stat-card h3 {
+    font-size: 2.5rem;
+    color: var(--primary-color);
+    margin-bottom: 0.5rem;
+}
+
+.stat-card p {
+    color: var(--text-secondary);
+    font-size: 0.9rem;
+}
+
+/* Action Buttons */
+.action-buttons {
+    display: flex;
+    gap: 1rem;
+    margin-bottom: 2rem;
+}
+
+/* Cards */
+.card {
+    background: var(--bg-secondary);
+    padding: 1.5rem;
+    border-radius: 12px;
+    margin-bottom: 1.5rem;
+    box-shadow: 0 4px 6px rgba(0, 0, 0, 0.3);
+}
+
+.card h3 {
+    margin-bottom: 1rem;
+    color: var(--text-primary);
+}
+
+/* Form Groups */
+.form-group {
+    margin-bottom: 1.5rem;
+}
+
+.form-group label {
+    display: block;
+    margin-bottom: 0.5rem;
+    color: var(--text-secondary);
+    font-weight: 500;
+}
+
+.form-group input[type="text"],
+.form-group input[type="password"],
+.form-group input[type="number"],
+.form-group input[type="time"],
+.form-group select {
+    width: 100%;
+    padding: 10px;
+    border: 1px solid var(--border-color);
+    border-radius: 6px;
+    background: var(--bg-card);
+    color: var(--text-primary);
+    font-size: 1rem;
+}
+
+.form-group input:focus,
+.form-group select:focus {
+    outline: none;
+    border-color: var(--primary-color);
+}
+
+.form-group small {
+    display: block;
+    margin-top: 0.5rem;
+    color: var(--text-secondary);
+    font-size: 0.85rem;
+}
+
+.form-group small a {
+    color: var(--primary-color);
+}
+
+.form-group input[type="checkbox"] {
+    margin-right: 0.5rem;
+}
+
+/* Search */
+.search-container {
+    display: flex;
+    gap: 1rem;
+    margin-bottom: 2rem;
+}
+
+.search-input {
+    flex: 1;
+    padding: 12px;
+    border: 1px solid var(--border-color);
+    border-radius: 6px;
+    background: var(--bg-secondary);
+    color: var(--text-primary);
+    font-size: 1rem;
+}
+
+/* Results */
+.results-container {
+    display: grid;
+    gap: 1rem;
+}
+
+.result-item {
+    background: var(--bg-secondary);
+    padding: 1rem;
+    border-radius: 8px;
+    border: 1px solid var(--border-color);
+    cursor: pointer;
+    transition: all 0.2s;
+}
+
+.result-item:hover {
+    border-color: var(--primary-color);
+    transform: translateY(-2px);
+}
+
+.result-item h4 {
+    color: var(--text-primary);
+    margin-bottom: 0.5rem;
+}
+
+.result-item p {
+    color: var(--text-secondary);
+    font-size: 0.9rem;
+}
+
+/* Movies Grid */
+.movies-grid {
+    display: grid;
+    grid-template-columns: repeat(auto-fill, minmax(280px, 1fr));
+    gap: 1.5rem;
+}
+
+.movie-card {
+    background: var(--bg-secondary);
+    border-radius: 12px;
+    overflow: hidden;
+    box-shadow: 0 4px 6px rgba(0, 0, 0, 0.3);
+    transition: all 0.2s;
+    display: flex;
+    flex-direction: column;
+}
+
+.movie-card:hover {
+    transform: translateY(-4px);
+    box-shadow: 0 8px 12px rgba(0, 0, 0, 0.4);
+}
+
+/* ── Movie poster ───────────────────────────────────────────────────────
+   The wrapper reserves a fixed 400px tall slot immediately when the card
+   is painted — before the network request for the image even starts.
+   This means the buttons are never displaced when the image arrives.
+──────────────────────────────────────────────────────────────────────── */
+.movie-poster-wrapper {
+    width: 100%;
+    height: 400px;
+    min-height: 400px;      /* never collapse even with no img child */
+    background: var(--bg-card);
+    overflow: hidden;
+    position: relative;
+    flex-shrink: 0;         /* card is flex-column — don't let this shrink */
+    display: flex;
+    align-items: center;
+    justify-content: center;
+}
+
+/* Emoji placeholder always sits in the centre */
+.movie-poster-wrapper::before {
+    content: "🎬";
+    position: absolute;
+    font-size: 3rem;
+    opacity: 0.25;
+    pointer-events: none;
+    /* stays visible until the img covers it */
+    z-index: 0;
+}
+
+.movie-poster-wrapper img {
+    position: absolute;
+    inset: 0;               /* fill the wrapper exactly */
+    width: 100%;
+    height: 100%;
+    object-fit: cover;
+    display: block;
+    z-index: 1;
+    /* Start invisible; fade in only after the image has fully decoded.
+       This prevents ANY reflow — the space is already reserved. */
+    opacity: 0;
+    transition: opacity 0.25s ease;
+}
+
+.movie-poster-wrapper img.loaded {
+    opacity: 1;
+}
+
+.movie-info {
+    padding: 1rem;
+}
+
+.movie-title {
+    font-size: 1.1rem;
+    font-weight: bold;
+    margin-bottom: 0.5rem;
+}
+
+.movie-meta {
+    display: flex;
+    justify-content: space-between;
+    align-items: center;
+    margin-bottom: 0.5rem;
+    color: var(--text-secondary);
+    font-size: 0.9rem;
+}
+
+.movie-rating {
+    background: var(--success-color);
+    color: white;
+    padding: 2px 8px;
+    border-radius: 4px;
+    font-weight: bold;
+}
+
+.movie-rating.low {
+    background: var(--warning-color);
+}
+
+.movie-status {
+    display: flex;
+    gap: 0.5rem;
+    margin-bottom: 0.5rem;
+}
+
+.status-badge {
+    font-size: 0.8rem;
+    padding: 2px 8px;
+    border-radius: 4px;
+    background: var(--bg-card);
+}
+
+.status-badge.downloaded {
+    background: var(--success-color);
+    color: white;
+}
+
+.status-badge.rejected {
+    background: var(--danger-color);
+    color: white;
+}
+
+.movie-actions {
+    display: flex;
+    gap: 0.5rem;
+    margin-top: 1rem;
+}
+
+.movie-actions button {
+    flex: 1;
+    padding: 8px;
+    font-size: 0.9rem;
+}
+
+/* Filters */
+.filters {
+    display: flex;
+    gap: 1rem;
+    margin-bottom: 2rem;
+}
+
+.filter-btn {
+    padding: 8px 16px;
+    border: 1px solid var(--border-color);
+    border-radius: 6px;
+    background: var(--bg-secondary);
+    color: var(--text-secondary);
+    cursor: pointer;
+    transition: all 0.2s;
+}
+
+.filter-btn:hover {
+    border-color: var(--primary-color);
+    color: var(--text-primary);
+}
+
+.filter-btn.active {
+    background: var(--primary-color);
+    color: white;
+    border-color: var(--primary-color);
+}
+
+/* Settings Tabs */
+.settings-tabs {
+    display: flex;
+    gap: 1rem;
+    margin-bottom: 2rem;
+    border-bottom: 2px solid var(--border-color);
+}
+
+.tab-btn {
+    padding: 12px 24px;
+    border: none;
+    background: transparent;
+    color: var(--text-secondary);
+    cursor: pointer;
+    border-bottom: 2px solid transparent;
+    margin-bottom: -2px;
+    transition: all 0.2s;
+}
+
+.tab-btn:hover {
+    color: var(--text-primary);
+}
+
+.tab-btn.active {
+    color: var(--primary-color);
+    border-bottom-color: var(--primary-color);
+}
+
+.settings-tab {
+    display: none;
+}
+
+.settings-tab.active {
+    display: block;
+}
+
+/* Status Indicator */
+.status-indicator {
+    display: inline-block;
+    margin-left: 1rem;
+    padding: 4px 12px;
+    border-radius: 4px;
+    font-size: 0.9rem;
+}
+
+.status-indicator.success {
+    background: var(--success-color);
+    color: white;
+}
+
+.status-indicator.error {
+    background: var(--danger-color);
+    color: white;
+}
+
+/* Logs */
+.log-controls {
+    display: flex;
+    gap: 1rem;
+    margin-bottom: 2rem;
+    align-items: center;
+    flex-wrap: wrap;
+}
+
+.log-controls select {
+    padding: 8px 12px;
+    border: 1px solid var(--border-color);
+    border-radius: 6px;
+    background: var(--bg-secondary);
+    color: var(--text-primary);
+}
+
+.logs-container {
+    background: var(--bg-secondary);
+    border-radius: 8px;
+    padding: 1rem;
+    max-height: 600px;
+    overflow-y: auto;
+}
+
+.log-entry {
+    padding: 0.75rem;
+    border-bottom: 1px solid var(--border-color);
+    font-family: 'Courier New', monospace;
+    font-size: 0.9rem;
+}
+
+.log-entry:last-child {
+    border-bottom: none;
+}
+
+.log-entry.DEBUG {
+    color: var(--text-secondary);
+}
+
+.log-entry.INFO {
+    color: #60a5fa;
+}
+
+.log-entry.WARNING {
+    color: var(--warning-color);
+}
+
+.log-entry.ERROR {
+    color: var(--danger-color);
+}
+
+.log-time {
+    color: var(--text-secondary);
+    margin-right: 1rem;
+}
+
+.log-level {
+    display: inline-block;
+    padding: 2px 6px;
+    border-radius: 3px;
+    margin-right: 1rem;
+    font-weight: bold;
+    min-width: 60px;
+    text-align: center;
+}
+
+.log-level.DEBUG {
+    background: var(--bg-card);
+}
+
+.log-level.INFO {
+    background: #1e40af;
+}
+
+.log-level.WARNING {
+    background: #d97706;
+}
+
+.log-level.ERROR {
+    background: #b91c1c;
+}
+
+/* Modal */
+.modal {
+    position: fixed;
+    top: 0;
+    left: 0;
+    width: 100%;
+    height: 100%;
+    background: rgba(0, 0, 0, 0.8);
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    z-index: 1000;
+}
+
+.modal-content {
+    background: var(--bg-secondary);
+    padding: 2rem;
+    border-radius: 12px;
+    max-width: 800px;
+    max-height: 90vh;
+    overflow-y: auto;
+    position: relative;
+}
+
+.close {
+    position: absolute;
+    top: 1rem;
+    right: 1rem;
+    font-size: 2rem;
+    cursor: pointer;
+    color: var(--text-secondary);
+}
+
+.close:hover {
+    color: var(--text-primary);
+}
+
+/* Loading Overlay */
+.loading-overlay {
+    position: fixed;
+    top: 0;
+    left: 0;
+    width: 100%;
+    height: 100%;
+    background: rgba(0, 0, 0, 0.8);
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    justify-content: center;
+    z-index: 2000;
+}
+
+.spinner {
+    border: 4px solid var(--border-color);
+    border-top: 4px solid var(--primary-color);
+    border-radius: 50%;
+    width: 60px;
+    height: 60px;
+    animation: spin 1s linear infinite;
+}
+
+@keyframes spin {
+    0% { transform: rotate(0deg); }
+    100% { transform: rotate(360deg); }
+}
+
+@keyframes slideIn {
+    from { opacity: 0; transform: translateY(10px); }
+    to   { opacity: 1; transform: translateY(0); }
+}
+
+@keyframes pulse {
+    0%, 100% { opacity: 1; transform: scale(1); }
+    50%       { opacity: 0.4; transform: scale(1.3); }
+}
+
+/* Radarr status badges */
+.status-badge.radarr-yes {
+    background: var(--success-color);
+    color: white;
+    font-size: 0.78rem;
+}
+
+.status-badge.radarr-no {
+    background: var(--danger-color);
+    color: white;
+    font-size: 0.78rem;
+}
+
+/* Small icon-style action buttons */
+.btn-icon {
+    background: var(--bg-card);
+    color: var(--text-primary);
+    border: 1px solid var(--border-color);
+    border-radius: 6px;
+    padding: 6px 9px;
+    font-size: 0.82rem;
+    cursor: pointer;
+    transition: all 0.2s;
+    font-weight: 500;
+    white-space: nowrap;
+}
+
+.btn-icon:hover {
+    background: var(--secondary-color);
+    border-color: var(--secondary-color);
+    color: white;
+}
+
+.btn-icon:disabled {
+    opacity: 0.6;
+    cursor: not-allowed;
+}
+
+/* Make movie-actions wrap on small cards */
+.movie-actions {
+    flex-wrap: wrap;
+    gap: 0.4rem !important;
+}
+
+#loading-text {
+    margin-top: 1rem;
+    color: var(--text-primary);
+    font-size: 1.1rem;
+}
+
+/* Responsive */
+@media (max-width: 768px) {
+    .navbar {
+        flex-direction: column;
+        gap: 1rem;
+    }
+
+    .nav-links {
+        flex-wrap: wrap;
+        justify-content: center;
+    }
+
+    .stats-grid {
+        grid-template-columns: 1fr;
+    }
+
+    .action-buttons {
+        flex-direction: column;
+    }
+
+    .movies-grid {
+        grid-template-columns: 1fr;
+    }
+
+    .settings-tabs {
+        flex-wrap: wrap;
+    }
+}

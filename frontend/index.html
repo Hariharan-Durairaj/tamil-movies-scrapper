@@ -1,0 +1,402 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Movie Automator</title>
+    <link rel="stylesheet" href="/static/style.css">
+</head>
+<body>
+    <!-- Login/Setup Screen -->
+    <div id="auth-screen" class="screen">
+        <div class="auth-container">
+            <h1>🎬 Movie Automator</h1>
+            <div id="auth-form">
+                <input type="text" id="username" placeholder="Username" autocomplete="username">
+                <input type="password" id="password" placeholder="Password" autocomplete="current-password">
+                <button id="auth-submit" class="btn-primary">Login</button>
+                <p id="auth-error" class="error-message"></p>
+            </div>
+        </div>
+    </div>
+
+    <!-- Main App Screen -->
+    <div id="app-screen" class="screen hidden">
+        <!-- Navigation -->
+        <nav class="navbar">
+            <div class="nav-brand">🎬 Movie Automator</div>
+            <div class="nav-links">
+                <a href="#" data-page="dashboard" class="nav-link active">Dashboard</a>
+                <a href="#" data-page="search" class="nav-link">Search</a>
+                <a href="#" data-page="movies" class="nav-link">Movies</a>
+                <a href="#" data-page="settings" class="nav-link">Settings</a>
+                <a href="#" data-page="logs" class="nav-link">Logs</a>
+                <a href="#" id="logout-btn" class="nav-link">Logout</a>
+            </div>
+        </nav>
+
+        <!-- Main Content -->
+        <div class="container">
+            <!-- Dashboard Page -->
+            <div id="page-dashboard" class="page active">
+                <h2>Dashboard</h2>
+                
+                <div class="stats-grid">
+                    <div class="stat-card">
+                        <h3 id="stat-total">0</h3>
+                        <p>Total Movies</p>
+                    </div>
+                    <div class="stat-card">
+                        <h3 id="stat-downloaded">0</h3>
+                        <p>Downloaded</p>
+                    </div>
+                    <div class="stat-card">
+                        <h3 id="stat-pending">0</h3>
+                        <p>Pending</p>
+                    </div>
+                    <div class="stat-card">
+                        <h3 id="stat-rejected">0</h3>
+                        <p>Rejected</p>
+                    </div>
+                    <div class="stat-card">
+                        <h3 id="stat-radarr">0</h3>
+                        <p>In Radarr</p>
+                    </div>
+                </div>
+
+                <div class="action-buttons">
+                    <button id="btn-scan-forum" class="btn-primary">Scan Forum for New Movies</button>
+                    <button id="btn-sync-radarr" class="btn-secondary">Sync Tamil Movies from Radarr</button>
+                    <button id="btn-refresh-library" class="btn-secondary">↻ Refresh All Movie Data</button>
+                </div>
+
+                <div id="scan-config" class="card hidden">
+                    <h3>Scan Configuration</h3>
+                    <div class="form-group">
+                        <label>Max Pages:</label>
+                        <input type="number" id="scan-pages" value="3" min="1" max="10">
+                    </div>
+                    <div class="form-group">
+                        <label>Max Links:</label>
+                        <input type="number" id="scan-links" value="50" min="1" max="200">
+                    </div>
+                    <button id="btn-start-scan" class="btn-primary">Start Scan</button>
+                    <button id="btn-cancel-scan" class="btn-secondary">Cancel</button>
+                </div>
+
+                <!-- Bulk Add Section -->
+                <div class="card" style="margin-top:1.5rem">
+                    <h3>Bulk Add Movies</h3>
+                    <div class="form-group">
+                        <label>Movie Names (comma-separated):</label>
+                        <input type="text" id="bulk-add-input" placeholder="Inception, Interstellar, The Dark Knight" style="width:100%;padding:10px;border:1px solid var(--border-color);border-radius:6px;background:var(--bg-card);color:var(--text-primary);font-size:1rem;">
+                        <small>Each name will be searched on the forum and processed automatically.</small>
+                    </div>
+                    <button id="btn-bulk-add" class="btn-primary">Add Movies</button>
+                    <span id="bulk-add-status" style="margin-left:1rem;color:var(--success-color);"></span>
+                </div>
+            </div>
+
+            <!-- Search Page -->
+            <div id="page-search" class="page">
+                <h2>Search Movie</h2>
+                
+                <div class="search-container">
+                    <input type="text" id="search-input" placeholder="Enter movie name..." class="search-input">
+                    <button id="btn-search" class="btn-primary">Search</button>
+                </div>
+
+                <div id="search-results" class="results-container"></div>
+            </div>
+
+            <!-- Movies Page -->
+            <div id="page-movies" class="page">
+                <h2>All Movies</h2>
+                
+                <div class="filters">
+                    <button class="filter-btn active" data-filter="all">All</button>
+                    <button class="filter-btn" data-filter="downloaded">Downloaded</button>
+                    <button class="filter-btn" data-filter="pending">Pending</button>
+                    <button class="filter-btn" data-filter="rejected">Rejected</button>
+                    <button class="filter-btn" data-filter="in_radarr">In Radarr</button>
+                    <button class="filter-btn" data-filter="not_in_radarr">Not in Radarr</button>
+                </div>
+
+                <div id="movies-list" class="movies-grid"></div>
+            </div>
+
+            <!-- Settings Page -->
+            <div id="page-settings" class="page">
+                <h2>Settings</h2>
+                
+                <div class="settings-tabs">
+                    <button class="tab-btn active" data-tab="general">General</button>
+                    <button class="tab-btn" data-tab="apis">API Configuration</button>
+                    <button class="tab-btn" data-tab="automation">Automation</button>
+                    <button class="tab-btn" data-tab="domain">Domain</button>
+                </div>
+
+                <!-- General Settings -->
+                <div id="settings-general" class="settings-tab active">
+                    <div class="card">
+                        <h3>Server Settings</h3>
+                        <div class="form-group">
+                            <label>Port:</label>
+                            <input type="number" id="setting-port" class="setting-input" data-key="port">
+                        </div>
+                    </div>
+
+                    <div class="card">
+                        <h3>Forum Settings</h3>
+                        <div class="form-group">
+                            <label>Website Base (e.g., www.1tamilmv):</label>
+                            <input type="text" id="setting-website-base" class="setting-input" data-key="website_base">
+                        </div>
+                        <div class="form-group">
+                            <label>Forum URL:</label>
+                            <input type="text" id="setting-forum-url" class="setting-input" data-key="forum_url">
+                            <small>Main forum page URL (use /page/2/ for pagination)</small>
+                        </div>
+                        <div class="form-group">
+                            <label>Search URL Template:</label>
+                            <input type="text" id="setting-search-url" class="setting-input" data-key="search_url">
+                            <small>Use {query} as placeholder for search term</small>
+                        </div>
+                    </div>
+
+                    <div class="card">
+                        <h3>Download Preferences</h3>
+                        <div class="form-group">
+                            <label>Preferred Quality:</label>
+                            <select id="setting-quality" class="setting-input" data-key="preferred_quality">
+                                <option value="4K">4K</option>
+                                <option value="2160p">2160p</option>
+                                <option value="1080p">1080p</option>
+                                <option value="720p">720p</option>
+                                <option value="480p">480p</option>
+                            </select>
+                        </div>
+                        <div class="form-group">
+                            <label>Preferred Codec:</label>
+                            <select id="setting-codec" class="setting-input" data-key="preferred_codec">
+                                <option value="HEVC">HEVC (H.265)</option>
+                                <option value="AVC">AVC (H.264)</option>
+                                <option value="x264">x264</option>
+                                <option value="x265">x265</option>
+                            </select>
+                        </div>
+                        <div class="form-group">
+                            <label>Rating Threshold:</label>
+                            <input type="number" step="0.1" min="0" max="10" id="setting-rating-threshold" class="setting-input" data-key="rating_threshold">
+                            <small>Minimum IMDB rating to auto-download</small>
+                        </div>
+                    </div>
+                </div>
+
+                <!-- API Settings -->
+                <div id="settings-apis" class="settings-tab">
+                    <div class="card">
+                        <h3>Radarr</h3>
+                        <div class="form-group">
+                            <label>Radarr URL:</label>
+                            <input type="text" id="setting-radarr-url" class="setting-input" data-key="radarr_url" placeholder="http://localhost:7878">
+                        </div>
+                        <div class="form-group">
+                            <label>API Key:</label>
+                            <input type="text" id="setting-radarr-api" class="setting-input" data-key="radarr_api_key">
+                        </div>
+                        <div class="form-group">
+                            <label>Movie Root Folder Path:</label>
+                            <div style="display:flex;gap:0.5rem;align-items:center;">
+                                <input type="text" id="setting-radarr-root-folder"
+                                       class="setting-input" data-key="radarr_root_folder"
+                                       placeholder="e.g. /movies  (leave blank to use Radarr default)"
+                                       style="flex:1;">
+                                <button id="btn-browse-root-folders" class="btn-test"
+                                        title="Load folders configured in Radarr">Browse</button>
+                            </div>
+                            <small>
+                                Path must exactly match one of the root folders already configured in Radarr.
+                                Click <strong>Browse</strong> to pick from your Radarr configuration.
+                                Leave blank to use Radarr's default first folder.
+                            </small>
+                            <!-- Dropdown shown after Browse is clicked -->
+                            <div id="radarr-folder-picker" style="display:none;margin-top:0.5rem;"></div>
+                        </div>
+                        <button id="test-radarr" class="btn-test">Test Connection</button>
+                        <span id="radarr-status" class="status-indicator"></span>
+                    </div>
+
+                    <div class="card">
+                        <h3>qBittorrent</h3>
+                        <div class="form-group">
+                            <label>qBittorrent URL:</label>
+                            <input type="text" id="setting-qb-url" class="setting-input" data-key="qbittorrent_url" placeholder="http://localhost:8080">
+                        </div>
+                        <div class="form-group">
+                            <label>Username:</label>
+                            <input type="text" id="setting-qb-user" class="setting-input" data-key="qbittorrent_username">
+                        </div>
+                        <div class="form-group">
+                            <label>Password:</label>
+                            <input type="password" id="setting-qb-pass" class="setting-input" data-key="qbittorrent_password">
+                        </div>
+                        <button id="test-qbittorrent" class="btn-test">Test Connection</button>
+                        <span id="qbittorrent-status" class="status-indicator"></span>
+                    </div>
+
+                    <div class="card">
+                        <h3>OMDB API</h3>
+                        <div class="form-group">
+                            <label>API Key:</label>
+                            <input type="text" id="setting-omdb-api" class="setting-input" data-key="omdb_api_key">
+                            <small>Get free key from <a href="https://www.omdbapi.com/apikey.aspx" target="_blank">omdbapi.com</a></small>
+                        </div>
+                        <button id="test-omdb" class="btn-test">Test Connection</button>
+                        <span id="omdb-status" class="status-indicator"></span>
+                    </div>
+
+                    <div class="card">
+                        <h3>TMDB API</h3>
+                        <div class="form-group">
+                            <label>API Key:</label>
+                            <input type="text" id="setting-tmdb-api" class="setting-input" data-key="tmdb_api_key">
+                            <small>Get free key from <a href="https://www.themoviedb.org/settings/api" target="_blank">themoviedb.org</a></small>
+                        </div>
+                        <button id="test-tmdb" class="btn-test">Test Connection</button>
+                        <span id="tmdb-status" class="status-indicator"></span>
+                    </div>
+                </div>
+
+                <!-- Automation Settings -->
+                <div id="settings-automation" class="settings-tab">
+                    <div class="card">
+                        <h3>Automatic Scanning</h3>
+                        <div class="form-group">
+                            <label>
+                                <input type="checkbox" id="setting-daily-scan" class="setting-checkbox" data-key="daily_scan_enabled">
+                                Enable Daily Scan
+                            </label>
+                        </div>
+                        <div class="form-group">
+                            <label>Scan Time (24h format):</label>
+                            <input type="time" id="setting-scan-time" class="setting-input" data-key="daily_scan_time">
+                        </div>
+                        <div class="form-group">
+                            <label>Pages to Scan:</label>
+                            <input type="number" min="1" max="10" id="setting-scan-pages" class="setting-input" data-key="scan_pages">
+                        </div>
+                        <div class="form-group">
+                            <label>Max Links to Process:</label>
+                            <input type="number" min="1" max="200" id="setting-scan-links" class="setting-input" data-key="scan_links">
+                        </div>
+                        <div class="form-group">
+                            <label>Stop After X Duplicates:</label>
+                            <input type="number" min="1" max="20" id="setting-duplicate-stop" class="setting-input" data-key="duplicate_stop_count">
+                        </div>
+                        <div class="form-group">
+                            <label>
+                                <input type="checkbox" id="setting-auto-download" class="setting-checkbox" data-key="auto_download">
+                                Auto-download movies above rating threshold
+                            </label>
+                        </div>
+                    </div>
+
+                    <div class="card">
+                        <h3>System</h3>
+                        <div class="form-group">
+                            <label>
+                                <input type="checkbox" id="setting-auto-start" class="setting-checkbox" data-key="auto_start_enabled">
+                                Auto-start on system boot
+                            </label>
+                            <small>Note: This requires additional setup on your system</small>
+                        </div>
+                    </div>
+                </div>
+
+                <!-- Domain Settings -->
+                <div id="settings-domain" class="settings-tab">
+                    <div class="card">
+                        <h3>1TamilMV Domain Tracker</h3>
+                        <p style="color:var(--text-secondary);margin-bottom:1rem;">
+                            The 1tamilmv website frequently changes its domain extension (e.g. .cymru → .gripe → .xyz).
+                            Use this section to find and apply the current domain. The scheduler will also run this
+                            automatically every day and whenever the forum becomes unreachable.
+                        </p>
+                        <div class="form-group">
+                            <label>Full Domain Name (editable):</label>
+                            <input type="text" id="setting-full-domain" class="setting-input" data-key="full_domain"
+                                   placeholder="e.g. www.1tamilmv.cymru">
+                            <small>Editing this field and clicking "Apply Domain" will update Forum URL and Search URL automatically.</small>
+                        </div>
+                        <div style="display:flex;gap:1rem;flex-wrap:wrap;align-items:center;margin-top:0.5rem;">
+                            <button id="btn-find-domain" class="btn-primary">🔍 Auto-Find Domain via Google</button>
+                            <button id="btn-apply-domain" class="btn-secondary">✓ Apply Domain</button>
+                            <span id="domain-status" class="status-indicator"></span>
+                        </div>
+                        <p style="color:var(--text-secondary);font-size:0.85rem;margin-top:0.75rem;">
+                            ⚠️ Auto-Find opens a visible Chrome window (required — Google blocks headless mode). Do not close it.
+                        </p>
+                    </div>
+                    <div class="card">
+                        <h3>Current URLs (auto-updated)</h3>
+                        <div class="form-group">
+                            <label>Forum URL:</label>
+                            <input type="text" id="domain-forum-url-preview" class="setting-input" data-key="forum_url" readonly
+                                   style="opacity:0.7;">
+                        </div>
+                        <div class="form-group">
+                            <label>Search URL Template:</label>
+                            <input type="text" id="domain-search-url-preview" class="setting-input" data-key="search_url" readonly
+                                   style="opacity:0.7;">
+                        </div>
+                    </div>
+                </div>
+
+                <button id="btn-save-settings" class="btn-primary btn-large">Save All Settings</button>
+            </div>
+
+            <!-- Logs Page -->
+            <div id="page-logs" class="page">
+                <h2>Logs</h2>
+                
+                <div class="log-controls">
+                    <select id="log-level-filter">
+                        <option value="">All Levels</option>
+                        <option value="DEBUG">Debug</option>
+                        <option value="INFO">Info</option>
+                        <option value="WARNING">Warning</option>
+                        <option value="ERROR">Error</option>
+                    </select>
+                    <button id="btn-refresh-logs" class="btn-secondary">↺ Refresh</button>
+                    <button id="btn-autoscroll-logs" class="btn-secondary" style="font-size:0.9rem;">⬇ Auto-scroll ON</button>
+                    <button id="btn-clear-logs" class="btn-danger">Clear Old Logs</button>
+                    <!-- Live indicator — shown only while SSE is connected -->
+                    <span id="log-live-indicator" style="display:none;align-items:center;gap:0.4rem;font-size:0.85rem;color:var(--success-color);font-weight:600;">
+                        <span style="display:inline-block;width:8px;height:8px;border-radius:50%;background:var(--success-color);animation:pulse 1.4s ease-in-out infinite;"></span>
+                        LIVE
+                    </span>
+                </div>
+
+                <div id="logs-container" class="logs-container"></div>
+            </div>
+        </div>
+    </div>
+
+    <!-- Global Movie Details Modal (shared by Search + Movies pages) -->
+    <div id="movie-modal" class="modal hidden">
+        <div class="modal-content">
+            <span class="close">&times;</span>
+            <div id="modal-body"></div>
+        </div>
+    </div>
+
+    <!-- Loading Overlay -->
+    <div id="loading-overlay" class="loading-overlay hidden">
+        <div class="spinner"></div>
+        <p id="loading-text">Loading...</p>
+    </div>
+
+    <script src="/static/app.js"></script>
+</body>
+</html>

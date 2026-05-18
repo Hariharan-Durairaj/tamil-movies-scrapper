@@ -1,0 +1,47 @@
+version: "3.9"
+
+services:
+  # ── PostgreSQL ────────────────────────────────────────────────────────────
+  db:
+    image: postgres:16-alpine
+    container_name: movie_db
+    restart: unless-stopped
+    environment:
+      POSTGRES_DB: movie_automator
+      POSTGRES_USER: movie_user
+      POSTGRES_PASSWORD: movie_password   # change this in production
+    volumes:
+      - pg_data:/var/lib/postgresql/data
+      - ./init.sql:/docker-entrypoint-initdb.d/init.sql:ro
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U movie_user -d movie_automator"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+
+  # ── FastAPI backend ───────────────────────────────────────────────────────
+  backend:
+    build: .
+    container_name: movie_backend
+    restart: unless-stopped
+    depends_on:
+      db:
+        condition: service_healthy
+    ports:
+      - "8080:8080"
+    environment:
+      DB_HOST: db
+      DB_PORT: "5432"
+      DB_NAME: movie_automator
+      DB_USER: movie_user
+      DB_PASSWORD: movie_password        # must match db service above
+    volumes:
+      - ./downloads:/app/downloads       # torrent files persisted on host
+      - ./logs:/app/logs                 # log files persisted on host
+    # Optional: pass extra API keys without rebuilding the image
+    # env_file:
+    #   - .env
+
+volumes:
+  pg_data:
+    driver: local
