@@ -422,6 +422,10 @@ class QBittorrentClient:
 
     def _parse_add_response(self, response, label: str) -> bool:
         """Handle qBittorrent add response for both old (string) and new (JSON) formats."""
+        # 409 Conflict = torrent already exists, treat as success
+        if response.status_code == 409:
+            print(f"[QBITTORRENT] Torrent already exists (skipping): {label}")
+            return True
         if response.status_code != 200:
             print(f"[QBITTORRENT] Failed to add torrent: HTTP {response.status_code} — {response.text!r}")
             return False
