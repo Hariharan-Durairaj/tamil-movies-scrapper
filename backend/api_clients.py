@@ -396,11 +396,13 @@ class QBittorrentClient:
                 data={'username': self.username, 'password': self.password},
                 timeout=10,
             )
-            self.logged_in = response.status_code == 200 and response.text == 'Ok.'
+            # Older qBittorrent returns 200 + "Ok."
+            # Newer qBittorrent (5.x+) returns 204 with empty body
+            self.logged_in = response.status_code in (200, 204) and response.text.strip() in ('Ok.', '')
             if self.logged_in:
-                print("[QBITTORRENT] Successfully logged in")
+                print(f"[QBITTORRENT] Successfully logged in (HTTP {response.status_code})")
             else:
-                print(f"[QBITTORRENT] Login failed: {response.text}")
+                print(f"[QBITTORRENT] Login failed: HTTP {response.status_code} — {response.text!r}")
             return self.logged_in
         except Exception as e:
             print(f"[QBITTORRENT] Login error: {e}")
@@ -424,17 +426,19 @@ class QBittorrentClient:
             with open(torrent_path, 'rb') as f:
                 files = {'torrents': f}
                 data = {'category': category}
-                if save_path:
-                    data['savepath'] = save_path
+                # save_path is intentionally not forwarded: the backend runs in Docker
+                # and its internal paths don't exist on the qBittorrent LXC.
+                # qBittorrent will use its own configured default save path instead.
                 response = self.session.post(
                     f"{self.url}/api/v2/torrents/add",
                     files=files, data=data, timeout=30,
                 )
-            success = response.status_code == 200 and response.text == 'Ok.'
+            # Older qBittorrent: 200 + "Ok." / Newer (5.x+): 200 + "Ok." still for add
+            success = response.status_code == 200 and 'ok' in response.text.lower()
             if success:
                 print(f"[QBITTORRENT] Successfully added torrent: {torrent_path}")
             else:
-                print(f"[QBITTORRENT] Failed to add torrent: {response.text}")
+                print(f"[QBITTORRENT] Failed to add torrent: HTTP {response.status_code} — {response.text!r}")
             return success
         except Exception as e:
             print(f"[QBITTORRENT] Error adding torrent: {e}")
@@ -447,17 +451,16 @@ class QBittorrentClient:
                 return False
         try:
             data = {'urls': torrent_url, 'category': category}
-            if save_path:
-                data['savepath'] = save_path
+            # save_path intentionally omitted — see add_torrent_file note above.
             response = self.session.post(
                 f"{self.url}/api/v2/torrents/add",
                 data=data, timeout=30,
             )
-            success = response.status_code == 200 and response.text == 'Ok.'
+            success = response.status_code == 200 and 'ok' in response.text.lower()
             if success:
                 print(f"[QBITTORRENT] Successfully added torrent URL: {torrent_url}")
             else:
-                print(f"[QBITTORRENT] Failed to add torrent URL: {response.text}")
+                print(f"[QBITTORRENT] Failed to add torrent URL: HTTP {response.status_code} — {response.text!r}")
             return success
         except Exception as e:
             print(f"[QBITTORRENT] Error adding torrent URL: {e}")
