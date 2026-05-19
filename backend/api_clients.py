@@ -290,7 +290,10 @@ class RadarrClient:
                                     headers=self.headers,
                                     params={'term': term}, timeout=10)
             if response.status_code != 200:
-                print(f"[RADARR] Title lookup failed for '{term}': HTTP {response.status_code}")
+                msg = f"HTTP {response.status_code}"
+                if response.status_code == 503:
+                    msg += " — Radarr cannot reach TMDB. Check Radarr's own internet access (DNS/firewall inside its LXC or Docker network)."
+                print(f"[RADARR] Title lookup failed for '{term}': {msg}")
                 return None
             results = response.json()
             if not results:
@@ -417,6 +420,31 @@ class QBittorrentClient:
         except:
             return False
 
+    def _parse_add_response(self, response, label: str) -> bool:
+        """Handle qBittorrent add response for both old (string) and new (JSON) formats."""
+        if response.status_code != 200:
+            print(f"[QBITTORRENT] Failed to add torrent: HTTP {response.status_code} — {response.text!r}")
+            return False
+        text = response.text.strip()
+        # Old format: plain string "Ok."
+        if text == 'Ok.':
+            print(f"[QBITTORRENT] Successfully added: {label}")
+            return True
+        # New format (5.x+): JSON with success_count
+        try:
+            data = json.loads(text)
+            if data.get('success_count', 0) > 0:
+                print(f"[QBITTORRENT] Successfully added: {label}")
+                return True
+            if data.get('failure_count', 0) > 0:
+                print(f"[QBITTORRENT] qBittorrent reported failure: {text}")
+                return False
+        except (json.JSONDecodeError, AttributeError):
+            pass
+        # Fallback: any 200 response is treated as success
+        print(f"[QBITTORRENT] Successfully added (unrecognised response format): {label}")
+        return True
+
     def add_torrent_file(self, torrent_path: str, category: str = "radarr",
                          save_path: str = None) -> bool:
         if not self.logged_in:
@@ -433,12 +461,7 @@ class QBittorrentClient:
                     f"{self.url}/api/v2/torrents/add",
                     files=files, data=data, timeout=30,
                 )
-            # Older qBittorrent: 200 + "Ok." / Newer (5.x+): 200 + "Ok." still for add
-            success = response.status_code == 200 and 'ok' in response.text.lower()
-            if success:
-                print(f"[QBITTORRENT] Successfully added torrent: {torrent_path}")
-            else:
-                print(f"[QBITTORRENT] Failed to add torrent: HTTP {response.status_code} — {response.text!r}")
+            success = self._parse_add_response(response, torrent_path)
             return success
         except Exception as e:
             print(f"[QBITTORRENT] Error adding torrent: {e}")
@@ -456,11 +479,7 @@ class QBittorrentClient:
                 f"{self.url}/api/v2/torrents/add",
                 data=data, timeout=30,
             )
-            success = response.status_code == 200 and 'ok' in response.text.lower()
-            if success:
-                print(f"[QBITTORRENT] Successfully added torrent URL: {torrent_url}")
-            else:
-                print(f"[QBITTORRENT] Failed to add torrent URL: HTTP {response.status_code} — {response.text!r}")
+            success = self._parse_add_response(response, torrent_url)
             return success
         except Exception as e:
             print(f"[QBITTORRENT] Error adding torrent URL: {e}")
