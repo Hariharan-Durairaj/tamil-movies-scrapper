@@ -155,7 +155,7 @@ document.querySelectorAll('.nav-link').forEach(link => {
         // Load page data
         if (page === 'dashboard') loadDashboard();
         else if (page === 'movies') loadMovies();
-        else if (page === 'settings') loadSettings();
+        else if (page === 'settings') { loadSettings(); loadSchedulerStatus(); }
         else if (page === 'logs') loadLogs();
     });
 });
@@ -1349,3 +1349,75 @@ document.addEventListener('DOMContentLoaded', () => {
 
 // Start the app
 window.addEventListener('DOMContentLoaded', initApp);
+
+// Scheduler
+async function loadSchedulerStatus() {
+    try {
+        const response = await apiCall('/api/scheduler/status');
+        if (!response.ok) return;
+        const data = await response.json();
+
+        const badge = document.getElementById('scheduler-running-badge');
+        if (badge) {
+            badge.textContent = data.running ? 'Running' : 'Stopped';
+            badge.style.background = data.running ? 'var(--success-color, #22c55e)' : 'var(--error-color, #ef4444)';
+            badge.style.color = '#fff';
+        }
+
+        const jobsInfo = document.getElementById('scheduler-jobs-info');
+        if (jobsInfo) {
+            if (data.jobs && data.jobs.length > 0) {
+                jobsInfo.innerHTML = data.jobs.map(job => {
+                    const nextRun = job.next_run ? new Date(job.next_run).toLocaleString() : 'N/A';
+                    const name = job.job_func || 'task';
+                    return `<div style="margin-bottom:0.25rem;">📅 <strong>${name}</strong> — next run: ${nextRun}</div>`;
+                }).join('');
+            } else {
+                jobsInfo.textContent = data.running
+                    ? 'Scheduler is running but no jobs are registered. Enable Daily Scan above and save settings.'
+                    : 'Scheduler is not running.';
+            }
+        }
+    } catch (e) {
+        const jobsInfo = document.getElementById('scheduler-jobs-info');
+        if (jobsInfo) jobsInfo.textContent = 'Could not load scheduler status.';
+    }
+}
+
+document.getElementById('btn-run-now').addEventListener('click', async () => {
+    showLoading('Starting scan...');
+    try {
+        const response = await apiCall('/api/scheduler/run-now', { method: 'POST' });
+        hideLoading();
+        if (response.ok) {
+            showToast('Scan started in background! Check Logs for progress.', 'success');
+        } else {
+            showToast('Failed to start scan', 'error');
+        }
+    } catch (e) {
+        hideLoading();
+        showToast('Error starting scan', 'error');
+    }
+});
+
+document.getElementById('btn-reload-scheduler').addEventListener('click', async () => {
+    showLoading('Reloading schedule...');
+    try {
+        const response = await apiCall('/api/scheduler/reload', { method: 'POST' });
+        hideLoading();
+        if (response.ok) {
+            showToast('Scheduler reloaded!', 'success');
+            await loadSchedulerStatus();
+        } else {
+            showToast('Failed to reload scheduler', 'error');
+        }
+    } catch (e) {
+        hideLoading();
+        showToast('Error reloading scheduler', 'error');
+    }
+});
+
+document.getElementById('btn-refresh-scheduler-status').addEventListener('click', async () => {
+    await loadSchedulerStatus();
+    showToast('Status refreshed', 'success');
+});
