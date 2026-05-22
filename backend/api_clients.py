@@ -864,7 +864,7 @@ class DomainFinder:
                     return domain
 
         # Regex fallback on raw HTML for encoded/JS-injected hrefs
-        for url in re.findall(r'https?://[^\s"'<>]+', html):
+        for url in re.findall(r'https?://[^ "<>]+', html):
             for skip in ("duckduckgo", "bing.com", "brave.com",
                          "google", "microsoft", "schema.org"):
                 if skip in url:
