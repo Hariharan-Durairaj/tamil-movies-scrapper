@@ -206,6 +206,12 @@ def update_settings(data: SettingsUpdate, token: str):
     verify_token(token)
     db.update_settings(data.settings)
     processor.refresh_clients()
+    
+    # Reload scheduler tasks if automation settings changed
+    automation_keys = {'daily_scan_enabled', 'daily_scan_time', 'scan_pages', 'scan_links'}
+    if any(key in data.settings for key in automation_keys):
+        scheduler.reload_tasks()
+    
     db.add_log('INFO', 'Settings updated', {'keys': list(data.settings.keys())})
     return {"success": True}
 
@@ -712,6 +718,38 @@ def get_stats(token: str):
         'rejected':     rejected,
         'in_radarr':    in_radarr,
     }
+
+# ---------------------------------------------------------------------------
+# Scheduler Status
+# ---------------------------------------------------------------------------
+@app.get("/api/scheduler/status")
+def get_scheduler_status(token: str):
+    """Get current scheduler status and scheduled tasks"""
+    verify_token(token)
+    import schedule
+    
+    jobs_info = []
+    for job in schedule.jobs:
+        jobs_info.append({
+            'next_run': job.next_run.isoformat() if job.next_run else None,
+            'interval': str(job.interval),
+            'unit': job.unit,
+            'at_time': str(job.at_time) if job.at_time else None,
+            'job_func': job.job_func.__name__ if hasattr(job.job_func, '__name__') else str(job.job_func)
+        })
+    
+    return {
+        'running': scheduler.running,
+        'jobs': jobs_info,
+        'jobs_count': len(schedule.jobs)
+    }
+
+@app.post("/api/scheduler/reload")
+def reload_scheduler(token: str):
+    """Manually reload scheduler tasks"""
+    verify_token(token)
+    scheduler.reload_tasks()
+    return {"success": True, "message": "Scheduler tasks reloaded"}
 
 # ---------------------------------------------------------------------------
 # Health check

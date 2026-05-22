@@ -40,6 +40,13 @@ class TaskScheduler:
                                 f'Scheduler main loop error: {e}',
                                 exc_info=e)
 
+    def reload_tasks(self):
+        """Reload scheduled tasks when settings change"""
+        if self.running:
+            schedule.clear()  # Clear all existing schedules
+            self._register_tasks()
+            self.db.add_log('INFO', 'Scheduler tasks reloaded')
+
     def _register_tasks(self):
         settings  = self.db.get_all_settings()
         scan_time = settings.get('daily_scan_time', '02:00')
@@ -49,6 +56,8 @@ class TaskScheduler:
             self.db.add_log('INFO',
                             f'Scheduled daily forum scan',
                             {'time': scan_time})
+        else:
+            self.db.add_log('INFO', 'Daily forum scan is disabled')
 
         schedule.every().monday.at("00:00").do(self._check_website_domain)
         schedule.every(30).days.do(self._clean_old_logs)
