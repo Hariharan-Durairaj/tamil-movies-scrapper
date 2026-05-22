@@ -117,15 +117,25 @@ class TaskScheduler:
 
     # ------------------------------------------------------------------
     def _daily_forum_scan(self):
+        started_at = datetime.now()
+        self.db.add_log('INFO', 'Scheduled forum scan: task entered')
         try:
             settings  = self.db.get_all_settings()
             max_pages = int(settings.get('scan_pages', '3'))
             max_links = int(settings.get('scan_links', '50'))
 
+            # Resolve next run time from settings (fixes NameError on scheduled_hour/minute)
+            scan_time = self._normalize_time(settings.get('daily_scan_time', '16:50'))
+            try:
+                scan_hour, scan_minute = map(int, scan_time.split(':'))
+            except Exception:
+                scan_hour, scan_minute = 16, 50
+
             self.db.add_log('INFO', 'Scheduled daily forum scan starting',
-                            {'max_pages': max_pages, 'max_links': max_links})
+                            {'max_pages': max_pages, 'max_links': max_links,
+                             'scheduled_time': scan_time})
             self.db.update_task('daily_forum_scan',
-                                last_run=datetime.now().isoformat(),
+                                last_run=started_at.isoformat(),
                                 status='running')
 
             results = self.processor.scan_forum_for_new_movies(
@@ -133,19 +143,28 @@ class TaskScheduler:
                 max_links=max_links
             )
 
+            # Compute next run = tomorrow at the scheduled time
+            from datetime import timedelta
+            next_run_dt = (started_at + timedelta(days=1)).replace(
+                hour=scan_hour, minute=scan_minute, second=0, microsecond=0)
+
             self.db.update_task('daily_forum_scan',
                                 status='completed',
-                                next_run=datetime.now().replace(
-                                    hour=scheduled_hour, minute=scheduled_minute, second=0).isoformat())
+                                next_run=next_run_dt.isoformat())
             self.db.add_log('INFO',
-                            f'Scheduled forum scan finished',
-                            {'movies_processed': len(results)})
+                            'Scheduled forum scan finished',
+                            {'movies_processed': len(results),
+                             'duration_seconds': round((datetime.now() - started_at).total_seconds()),
+                             'next_run': next_run_dt.strftime('%Y-%m-%d %H:%M')})
 
         except Exception as e:
             self.db.add_log('ERROR',
                             f'Daily forum scan task failed: {e}',
                             exc_info=e)
-            self.db.update_task('daily_forum_scan', status='failed')
+            try:
+                self.db.update_task('daily_forum_scan', status='failed')
+            except Exception:
+                pass
 
     # ------------------------------------------------------------------
     def _check_website_domain(self):

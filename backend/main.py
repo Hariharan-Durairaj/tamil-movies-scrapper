@@ -757,12 +757,14 @@ def run_scheduled_scan_now(background_tasks: BackgroundTasks, token: str):
     verify_token(token)
     
     def run_scan():
+        db.add_log('INFO', 'Manual run-now triggered via API')
         try:
             scheduler._daily_forum_scan()
         except Exception as e:
-            db.add_log('ERROR', f'Manual scheduled scan failed: {e}', exc_info=e)
+            db.add_log('ERROR', f'Manual run-now scan failed: {e}', exc_info=e)
     
     background_tasks.add_task(run_scan)
+    db.add_log('INFO', 'Manual run-now: background task queued')
     return {"success": True, "message": "Scheduled scan started (running in background)"}
 
 # ---------------------------------------------------------------------------
