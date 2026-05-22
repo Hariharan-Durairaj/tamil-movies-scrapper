@@ -818,7 +818,7 @@ class DomainFinder:
     def _search_brave(self, website_base: str, base_name: str) -> Optional[str]:
         """Brave Search."""
         url = "https://search.brave.com/search"
-        params = {"q": website_base}
+        params ={"q": website_base}
         resp = requests.get(url, params=params, headers=self._HEADERS, timeout=15)
         resp.raise_for_status()
         return self._extract_domain_from_html(resp.text, base_name)
@@ -826,34 +826,71 @@ class DomainFinder:
     def _probe_tlds(self, base_name: str) -> Optional[str]:
         """
         Directly try HTTPS connections to <base_name>.<tld> for each known TLD.
-        Returns the first domain that responds with HTTP 200 or 301/302.
+        Returns the first domain whose page content confirms it is the real site
+        (contains site-name keywords), not a parked or error page.
+        Uses GET (not HEAD) so we can inspect the response body.
         """
         for tld in self._PROBE_TLDS:
             domain = f"www.{base_name}.{tld}"
             try:
-                resp = requests.head(
+                resp = requests.get(
                     f"https://{domain}",
                     headers=self._HEADERS,
-                    timeout=5,
+                    timeout=8,
                     allow_redirects=True,
                 )
-                if resp.status_code < 400:
+                # Accept any HTTP response (even 403 from Cloudflare means the domain
+                # is live), but REJECT generic error/parked-page responses.
+                body = resp.text.lower()
+                # Skip obviously wrong responses
+                if any(bad in body for bad in [
+                    "host not in allowlist",
+                    "domain not found",
+                    "parked domain",
+                    "this domain is for sale",
+                    "404 not found",
+                    "under construction",
+                ]):
+                    continue
+                # Confirm it looks like the real site: either the name appears in the
+                # page, or Cloudflare is protecting it (CF-Ray header present = real site)
+                has_cf = bool(resp.headers.get("CF-Ray") or resp.headers.get("cf-ray"))
+                has_name = base_name.lower() in body or base_name.lower() in resp.url.lower()
+                if has_cf or has_name:
+                    print(f"[DOMAIN] TLD probe confirmed: {domain} (CF={has_cf})")
                     return domain
             except Exception:
                 continue
         return None
 
     # ------------------------------------------------------------------
+    def _unwrap_ddg_url(self, href: str) -> str:
+        """
+        DuckDuckGo wraps result URLs as:
+          //duckduckgo.com/l/?uddg=https%3A%2F%2Fwww.example.com%2F&rut=...
+        This method unwraps the real URL from the `uddg` query parameter.
+        """
+        if "duckduckgo.com/l/" in href:
+            try:
+                full = href if href.startswith("http") else "https:" + href
+                qs = urllib.parse.parse_qs(urllib.parse.urlparse(full).query)
+                if "uddg" in qs:
+                    return qs["uddg"][0]
+            except Exception:
+                pass
+        return href
+
     def _extract_domain_from_html(self, html: str, base_name: str) -> Optional[str]:
-        """Parse HTML from a search results page and find a matching domain."""
+        """Parse HTML from a search results page and find a matching domain.
+        Handles DuckDuckGo redirect wrappers and Bing/Brave direct hrefs."""
         soup = BeautifulSoup(html, "html.parser")
 
-        # Walk every anchor tag with an href
+        # Walk every anchor tag with an href, unwrapping DDG redirects
         for a in soup.find_all("a", href=True):
-            href = a["href"]
+            href = self._unwrap_ddg_url(a["href"])
             if not href.startswith("http"):
                 continue
-            # Skip the search engine's own pages
+            # Skip the search engine's own infrastructure pages
             for skip in ("duckduckgo.com", "bing.com", "brave.com",
                          "google.com", "microsoft.com"):
                 if skip in href:
@@ -863,7 +900,17 @@ class DomainFinder:
                 if domain and base_name in domain:
                     return domain
 
-        # Regex fallback on raw HTML for encoded/JS-injected hrefs
+        # Regex fallback: find encoded uddg= parameters directly in raw HTML
+        for encoded in re.findall(r'uddg=([^&"\s]+)', html):
+            try:
+                real_url = urllib.parse.unquote(encoded)
+                domain = self._domain_from_url(real_url)
+                if domain and base_name in domain:
+                    return domain
+            except Exception:
+                continue
+
+        # Final regex fallback on plain hrefs in raw HTML
         for url in re.findall(r'https?://[^ "<>]+', html):
             for skip in ("duckduckgo", "bing.com", "brave.com",
                          "google", "microsoft", "schema.org"):
