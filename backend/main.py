@@ -751,6 +751,20 @@ def reload_scheduler(token: str):
     scheduler.reload_tasks()
     return {"success": True, "message": "Scheduler tasks reloaded"}
 
+@app.post("/api/scheduler/run-now")
+def run_scheduled_scan_now(background_tasks: BackgroundTasks, token: str):
+    """Run the daily forum scan immediately (doesn't affect schedule)"""
+    verify_token(token)
+    
+    def run_scan():
+        try:
+            scheduler._daily_forum_scan()
+        except Exception as e:
+            db.add_log('ERROR', f'Manual scheduled scan failed: {e}', exc_info=e)
+    
+    background_tasks.add_task(run_scan)
+    return {"success": True, "message": "Scheduled scan started (running in background)"}
+
 # ---------------------------------------------------------------------------
 # Health check
 # ---------------------------------------------------------------------------

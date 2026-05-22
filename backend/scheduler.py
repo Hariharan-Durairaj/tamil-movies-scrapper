@@ -52,15 +52,68 @@ class TaskScheduler:
         scan_time = settings.get('daily_scan_time', '02:00')
 
         if settings.get('daily_scan_enabled') == 'true':
-            schedule.every().day.at(scan_time).do(self._daily_forum_scan)
-            self.db.add_log('INFO',
-                            f'Scheduled daily forum scan',
-                            {'time': scan_time})
+            # Convert time to 24-hour format if needed
+            scan_time = self._normalize_time(scan_time)
+            
+            try:
+                job = schedule.every().day.at(scan_time).do(self._daily_forum_scan)
+                
+                # Check if scheduled time has already passed today
+                from datetime import datetime, time as dt_time
+                now = datetime.now()
+                scheduled_hour, scheduled_minute = map(int, scan_time.split(':'))
+                scheduled_time_today = now.replace(hour=scheduled_hour, minute=scheduled_minute, second=0, microsecond=0)
+                
+                # If we just scheduled it and the time has passed today, it won't run until tomorrow
+                # Log this clearly
+                if now > scheduled_time_today:
+                    next_run = scheduled_time_today.replace(day=scheduled_time_today.day + 1)
+                    self.db.add_log('INFO',
+                                    f'Scheduled daily forum scan (next run tomorrow)',
+                                    {'time': scan_time, 'next_run': next_run.strftime('%Y-%m-%d %H:%M')})
+                else:
+                    self.db.add_log('INFO',
+                                    f'Scheduled daily forum scan (runs today)',
+                                    {'time': scan_time, 'next_run': scheduled_time_today.strftime('%Y-%m-%d %H:%M')})
+                    
+            except Exception as e:
+                self.db.add_log('ERROR',
+                                f'Invalid time format: {scan_time}. Use 24-hour format (HH:MM)',
+                                exc_info=e)
         else:
             self.db.add_log('INFO', 'Daily forum scan is disabled')
 
         schedule.every().monday.at("00:00").do(self._check_website_domain)
         schedule.every(30).days.do(self._clean_old_logs)
+    
+    def _normalize_time(self, time_str):
+        """Convert time to 24-hour format (HH:MM)"""
+        import re
+        
+        # Already in 24-hour format
+        if re.match(r'^\d{1,2}:\d{2}$', time_str):
+            parts = time_str.split(':')
+            hour = int(parts[0])
+            minute = int(parts[1])
+            if 0 <= hour <= 23 and 0 <= minute <= 59:
+                return f"{hour:02d}:{minute:02d}"
+        
+        # Try to parse AM/PM format
+        am_pm_match = re.match(r'^(\d{1,2}):(\d{2})\s*(am|pm)$', time_str.lower().strip())
+        if am_pm_match:
+            hour = int(am_pm_match.group(1))
+            minute = int(am_pm_match.group(2))
+            meridiem = am_pm_match.group(3)
+            
+            if meridiem == 'pm' and hour != 12:
+                hour += 12
+            elif meridiem == 'am' and hour == 12:
+                hour = 0
+                
+            return f"{hour:02d}:{minute:02d}"
+        
+        # Return original if can't parse
+        return time_str
 
     # ------------------------------------------------------------------
     def _daily_forum_scan(self):
