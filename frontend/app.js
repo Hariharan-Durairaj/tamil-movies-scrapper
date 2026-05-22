@@ -1121,7 +1121,10 @@ function displayLogs(logs) {
         return;
     }
 
-    logs.forEach(log => {
+    // API returns newest-first (DESC); reverse so oldest is at top and
+    // newest appears at the bottom — then scroll down to show latest.
+    const ordered = [...logs].reverse();
+    ordered.forEach(log => {
         const entry = document.createElement('div');
         entry.className = `log-entry ${log.level}`;
         const date = new Date(log.created_at);
@@ -1133,7 +1136,7 @@ function displayLogs(logs) {
         container.appendChild(entry);
     });
 
-    // Scroll to bottom on initial load
+    // Always scroll to the bottom so the latest log is visible immediately
     container.scrollTop = container.scrollHeight;
 }
 

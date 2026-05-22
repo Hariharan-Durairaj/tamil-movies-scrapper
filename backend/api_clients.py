@@ -729,77 +729,151 @@ class IMDBScraper:
 
 
 # ===========================================================================
-# DomainFinder  — locate current 1tamilmv domain via Google search
+# DomainFinder  — locate current 1tamilmv domain via HTTP requests (no browser needed)
 # ===========================================================================
 class DomainFinder:
     """
-    Uses a *visible* (non-headless) Chrome session to search Google and extract
-    the current domain for a website whose TLD keeps changing (e.g. www.1tamilmv).
+    Finds the current domain for a website whose TLD keeps changing
+    (e.g. www.1tamilmv) using pure HTTP requests — no Chrome/Selenium needed.
 
-    Google actively blocks headless browsers, so this intentionally opens a real
-    browser window.  It is designed to be run from a background scheduler or an
-    on-demand API call, not during a normal web request.
+    Tries multiple search engines in order: DuckDuckGo HTML, Bing, Brave, then
+    a direct HTTPS probe across a list of common TLDs as a last resort.
+    Works reliably inside Docker with no display or browser installed.
     """
+
+    # Browser-like headers to avoid bot-detection blocks
+    _HEADERS = {
+        "User-Agent": (
+            "Mozilla/5.0 (Windows NT 10.0; Win64; x64) "
+            "AppleWebKit/537.36 (KHTML, like Gecko) "
+            "Chrome/124.0.0.0 Safari/537.36"
+        ),
+        "Accept": "text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8",
+        "Accept-Language": "en-US,en;q=0.5",
+        "Accept-Encoding": "gzip, deflate, br",
+        "DNT": "1",
+        "Connection": "keep-alive",
+        "Upgrade-Insecure-Requests": "1",
+    }
+
+    # Common TLDs used by sites that frequently change domain extension
+    _PROBE_TLDS = [
+        "wtf", "lol", "cymru", "gripe", "xyz", "me", "net", "org",
+        "info", "cc", "to", "tv", "io", "co", "biz", "ws", "us",
+        "in", "uk", "eu", "de", "fr", "nl", "ca", "au", "nz",
+        "online", "site", "web", "app", "dev", "tech", "digital",
+        "click", "link", "live", "fun", "win", "top", "best", "pro",
+    ]
 
     def find_domain(self, website_base: str) -> Optional[str]:
         """
-        Google for *website_base* and return the domain of the first organic result
-        that contains the base name (e.g. "www.1tamilmv.gripe").
-        Returns None if nothing found.
+        Search for *website_base* and return its current domain.
+        Tries search engines first, then direct TLD probing as fallback.
         """
-        if not _SELENIUM_AVAILABLE:
-            print("[DOMAIN] undetected_chromedriver not installed")
-            return None
+        base_name = website_base.replace("www.", "").split(".")[0]  # e.g. "1tamilmv"
+        print(f"[DOMAIN] Running HTTP-based domain search for: {website_base}")
 
-        driver = _make_visible_driver()
-        search_url = (
-            "https://www.google.com/search?q="
-            + urllib.parse.quote(website_base)
-        )
-        try:
-            driver.get(search_url)
-            time.sleep(5)
-            page_source = driver.page_source
-            return self._extract_domain_from_html(page_source, website_base)
-        except Exception as e:
-            print(f"[DOMAIN] Google search error: {e}")
-            return None
-        finally:
-            driver.quit()
-
-    # ------------------------------------------------------------------
-    def _extract_domain_from_html(self, html: str, website_base: str) -> Optional[str]:
-        soup      = BeautifulSoup(html, "html.parser")
-        base_name = website_base.replace('www.', '').split('.')[0]   # e.g. "1tamilmv"
-
-        # Strategy 1 — anchor with class 'zReHs' (Google organic result)
-        anchor = soup.find("a", class_="zReHs")
-        if anchor and anchor.get("href"):
-            domain = self._domain_from_url(anchor["href"])
-            if domain and base_name in domain:
-                print(f"[DOMAIN] Strategy 1 found: {domain}")
-                return domain
-
-        # Strategy 2 — all anchors inside #rso
-        rso = soup.find(id="rso")
-        if rso:
-            for a in rso.find_all("a", href=True):
-                href = a["href"]
-                if href.startswith("http") and "google.com" not in href:
-                    domain = self._domain_from_url(href)
-                    if domain and base_name in domain:
-                        print(f"[DOMAIN] Strategy 2 found: {domain}")
-                        return domain
-
-        # Strategy 3 — regex fallback on raw HTML
-        for url in re.findall(r'href="(https?://[^"]+)"', html):
-            if "google.com" not in url and "googleapis" not in url:
-                domain = self._domain_from_url(url)
-                if domain and base_name in domain:
-                    print(f"[DOMAIN] Strategy 3 found: {domain}")
+        # Try each search engine
+        for engine_name, search_fn in [
+            ("DuckDuckGo", self._search_duckduckgo),
+            ("Bing",       self._search_bing),
+            ("Brave",      self._search_brave),
+        ]:
+            try:
+                domain = search_fn(website_base, base_name)
+                if domain:
+                    print(f"[DOMAIN] {engine_name} found: {domain}")
                     return domain
+                print(f"[DOMAIN] {engine_name} returned no result, trying next...")
+            except Exception as e:
+                print(f"[DOMAIN] {engine_name} error: {e}")
+
+        # Final fallback: probe common TLDs directly
+        print(f"[DOMAIN] All search engines failed — probing TLDs directly")
+        domain = self._probe_tlds(base_name)
+        if domain:
+            print(f"[DOMAIN] TLD probe found: {domain}")
+            return domain
 
         print(f"[DOMAIN] No domain found for '{website_base}'")
+        return None
+
+    # ------------------------------------------------------------------
+    def _search_duckduckgo(self, website_base: str, base_name: str) -> Optional[str]:
+        """DuckDuckGo HTML search (no JS required, very scraper-friendly)."""
+        url = "https://html.duckduckgo.com/html/"
+        data = {"q": website_base, "b": "", "kl": "us-en"}
+        resp = requests.post(url, data=data, headers=self._HEADERS, timeout=15)
+        resp.raise_for_status()
+        return self._extract_domain_from_html(resp.text, base_name)
+
+    def _search_bing(self, website_base: str, base_name: str) -> Optional[str]:
+        """Bing web search."""
+        url = "https://www.bing.com/search"
+        params = {"q": website_base, "form": "QBLH"}
+        resp = requests.get(url, params=params, headers=self._HEADERS, timeout=15)
+        resp.raise_for_status()
+        return self._extract_domain_from_html(resp.text, base_name)
+
+    def _search_brave(self, website_base: str, base_name: str) -> Optional[str]:
+        """Brave Search."""
+        url = "https://search.brave.com/search"
+        params = {"q": website_base}
+        resp = requests.get(url, params=params, headers=self._HEADERS, timeout=15)
+        resp.raise_for_status()
+        return self._extract_domain_from_html(resp.text, base_name)
+
+    def _probe_tlds(self, base_name: str) -> Optional[str]:
+        """
+        Directly try HTTPS connections to <base_name>.<tld> for each known TLD.
+        Returns the first domain that responds with HTTP 200 or 301/302.
+        """
+        for tld in self._PROBE_TLDS:
+            domain = f"www.{base_name}.{tld}"
+            try:
+                resp = requests.head(
+                    f"https://{domain}",
+                    headers=self._HEADERS,
+                    timeout=5,
+                    allow_redirects=True,
+                )
+                if resp.status_code < 400:
+                    return domain
+            except Exception:
+                continue
+        return None
+
+    # ------------------------------------------------------------------
+    def _extract_domain_from_html(self, html: str, base_name: str) -> Optional[str]:
+        """Parse HTML from a search results page and find a matching domain."""
+        soup = BeautifulSoup(html, "html.parser")
+
+        # Walk every anchor tag with an href
+        for a in soup.find_all("a", href=True):
+            href = a["href"]
+            if not href.startswith("http"):
+                continue
+            # Skip the search engine's own pages
+            for skip in ("duckduckgo.com", "bing.com", "brave.com",
+                         "google.com", "microsoft.com"):
+                if skip in href:
+                    break
+            else:
+                domain = self._domain_from_url(href)
+                if domain and base_name in domain:
+                    return domain
+
+        # Regex fallback on raw HTML for encoded/JS-injected hrefs
+        for url in re.findall(r'https?://[^\s"'<>]+', html):
+            for skip in ("duckduckgo", "bing.com", "brave.com",
+                         "google", "microsoft", "schema.org"):
+                if skip in url:
+                    break
+            else:
+                domain = self._domain_from_url(url)
+                if domain and base_name in domain:
+                    return domain
+
         return None
 
     @staticmethod
