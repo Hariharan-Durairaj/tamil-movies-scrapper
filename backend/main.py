@@ -16,6 +16,7 @@ import logging
 import logging.handlers
 from pathlib import Path
 
+from contextlib import asynccontextmanager
 from database import Database
 from movie_processor import MovieProcessor
 from api_clients import RadarrClient
@@ -24,10 +25,20 @@ from scheduler import TaskScheduler
 # ---------------------------------------------------------------------------
 # Initialise
 # ---------------------------------------------------------------------------
-app = FastAPI(title="Movie Automator API")
-db  = Database()
-processor  = MovieProcessor(db)
-scheduler  = TaskScheduler(db, processor)
+db        = Database()
+processor = MovieProcessor(db)
+scheduler = TaskScheduler(db, processor)
+
+@asynccontextmanager
+async def lifespan(app: FastAPI):
+    """Start the scheduler when uvicorn is ready; stop it on shutdown.
+    This runs regardless of whether the app is launched via `python main.py`
+    or `uvicorn main:app`, fixing the automation not running issue."""
+    scheduler.start()
+    yield
+    scheduler.stop()
+
+app = FastAPI(title="Movie Automator API", lifespan=lifespan)
 
 # ---------------------------------------------------------------------------
 # Log file setup — rotate daily, keep 30 days
@@ -810,9 +821,10 @@ if __name__ == "__main__":
     ╚══════════════════════════════════════════╝
     """)
 
-    scheduler.start()
-
+    # scheduler.start() / stop() are now handled by the FastAPI lifespan
+    # context manager above, so they work for both `python main.py` and
+    # `uvicorn main:app` (Docker) invocations.
     try:
         uvicorn.run(app, host="0.0.0.0", port=port, log_level="info")
     finally:
-        scheduler.stop()
+        pass  # lifespan handles cleanup
