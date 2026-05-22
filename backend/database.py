@@ -167,7 +167,7 @@ class Database:
                 'preferred_quality':    '1080p',
                 'preferred_codec':      'HEVC',
                 'daily_scan_enabled':   'true',
-                'daily_scan_time':      '02:00',
+                'daily_scan_time':      '16:50',
                 'scan_pages':           '3',
                 'scan_links':           '50',
                 'duplicate_stop_count': '5',

@@ -1352,19 +1352,28 @@ window.addEventListener('DOMContentLoaded', initApp);
 
 // Scheduler
 async function loadSchedulerStatus() {
+    const badge = document.getElementById('scheduler-running-badge');
+    const jobsInfo = document.getElementById('scheduler-jobs-info');
+    if (jobsInfo) jobsInfo.textContent = 'Loading...';
+
     try {
         const response = await apiCall('/api/scheduler/status');
-        if (!response.ok) return;
+
+        if (!response.ok) {
+            const errText = await response.text().catch(() => response.status);
+            if (badge) { badge.textContent = 'Error'; badge.style.background = '#ef4444'; badge.style.color = '#fff'; }
+            if (jobsInfo) jobsInfo.textContent = `Failed to load status (HTTP ${response.status}): ${errText}`;
+            return;
+        }
+
         const data = await response.json();
 
-        const badge = document.getElementById('scheduler-running-badge');
         if (badge) {
             badge.textContent = data.running ? 'Running' : 'Stopped';
-            badge.style.background = data.running ? 'var(--success-color, #22c55e)' : 'var(--error-color, #ef4444)';
+            badge.style.background = data.running ? 'var(--success-color, #22c55e)' : '#ef4444';
             badge.style.color = '#fff';
         }
 
-        const jobsInfo = document.getElementById('scheduler-jobs-info');
         if (jobsInfo) {
             if (data.jobs && data.jobs.length > 0) {
                 jobsInfo.innerHTML = data.jobs.map(job => {
@@ -1374,13 +1383,14 @@ async function loadSchedulerStatus() {
                 }).join('');
             } else {
                 jobsInfo.textContent = data.running
-                    ? 'Scheduler is running but no jobs are registered. Enable Daily Scan above and save settings.'
+                    ? 'Scheduler running — no jobs registered yet. Enable Daily Scan above, save settings, then click Reload Schedule.'
                     : 'Scheduler is not running.';
             }
         }
     } catch (e) {
-        const jobsInfo = document.getElementById('scheduler-jobs-info');
-        if (jobsInfo) jobsInfo.textContent = 'Could not load scheduler status.';
+        if (badge) { badge.textContent = 'Error'; badge.style.background = '#ef4444'; badge.style.color = '#fff'; }
+        if (jobsInfo) jobsInfo.textContent = `Error: ${e.message}`;
+        console.error('loadSchedulerStatus error:', e);
     }
 }
 
@@ -1392,11 +1402,12 @@ document.getElementById('btn-run-now').addEventListener('click', async () => {
         if (response.ok) {
             showToast('Scan started in background! Check Logs for progress.', 'success');
         } else {
-            showToast('Failed to start scan', 'error');
+            const err = await response.text().catch(() => '');
+            showToast(`Failed to start scan (${response.status}): ${err}`, 'error');
         }
     } catch (e) {
         hideLoading();
-        showToast('Error starting scan', 'error');
+        showToast(`Error starting scan: ${e.message}`, 'error');
     }
 });
 
@@ -1413,11 +1424,10 @@ document.getElementById('btn-reload-scheduler').addEventListener('click', async 
         }
     } catch (e) {
         hideLoading();
-        showToast('Error reloading scheduler', 'error');
+        showToast(`Error reloading scheduler: ${e.message}`, 'error');
     }
 });
 
 document.getElementById('btn-refresh-scheduler-status').addEventListener('click', async () => {
     await loadSchedulerStatus();
-    showToast('Status refreshed', 'success');
 });

@@ -49,7 +49,7 @@ class TaskScheduler:
 
     def _register_tasks(self):
         settings  = self.db.get_all_settings()
-        scan_time = settings.get('daily_scan_time', '02:00')
+        scan_time = settings.get('daily_scan_time', '16:50')
 
         if settings.get('daily_scan_enabled') == 'true':
             # Convert time to 24-hour format if needed
@@ -136,7 +136,7 @@ class TaskScheduler:
             self.db.update_task('daily_forum_scan',
                                 status='completed',
                                 next_run=datetime.now().replace(
-                                    hour=2, minute=0, second=0).isoformat())
+                                    hour=scheduled_hour, minute=scheduled_minute, second=0).isoformat())
             self.db.add_log('INFO',
                             f'Scheduled forum scan finished',
                             {'movies_processed': len(results)})
