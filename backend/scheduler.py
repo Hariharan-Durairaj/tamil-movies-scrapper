@@ -1,7 +1,7 @@
 import schedule
 import time
 import threading
-from datetime import datetime
+from datetime import datetime, timedelta
 from database import Database
 from movie_processor import MovieProcessor
 
@@ -14,6 +14,16 @@ class TaskScheduler:
         self.processor = processor
         self.running   = False
         self.thread    = None
+        self._lock     = threading.Lock()
+        # Use a per-instance scheduler instead of the global module singleton
+        # to avoid race conditions when reload is called from the API thread
+        # while the scheduler thread is also running jobs.
+        self._scheduler = schedule.Scheduler()
+
+    @property
+    def jobs(self):
+        """Expose the underlying job list for status reporting."""
+        return self._scheduler.jobs
 
     def start(self):
         if self.running:
@@ -33,7 +43,8 @@ class TaskScheduler:
         self._register_tasks()
         while self.running:
             try:
-                schedule.run_pending()
+                with self._lock:
+                    self._scheduler.run_pending()
                 time.sleep(60)
             except Exception as e:
                 self.db.add_log('ERROR',
@@ -43,8 +54,9 @@ class TaskScheduler:
     def reload_tasks(self):
         """Reload scheduled tasks when settings change"""
         if self.running:
-            schedule.clear()  # Clear all existing schedules
-            self._register_tasks()
+            with self._lock:
+                self._scheduler.clear()
+                self._register_tasks()
             self.db.add_log('INFO', 'Scheduler tasks reloaded')
 
     def _register_tasks(self):
@@ -56,18 +68,17 @@ class TaskScheduler:
             scan_time = self._normalize_time(scan_time)
             
             try:
-                job = schedule.every().day.at(scan_time).do(self._daily_forum_scan)
+                self._scheduler.every().day.at(scan_time).do(self._daily_forum_scan)
                 
                 # Check if scheduled time has already passed today
-                from datetime import datetime, time as dt_time
                 now = datetime.now()
                 scheduled_hour, scheduled_minute = map(int, scan_time.split(':'))
                 scheduled_time_today = now.replace(hour=scheduled_hour, minute=scheduled_minute, second=0, microsecond=0)
                 
-                # If we just scheduled it and the time has passed today, it won't run until tomorrow
-                # Log this clearly
+                # If we just scheduled it and the time has passed today, it won't run until tomorrow.
+                # Use timedelta instead of day+1 to avoid ValueError on the last day of a month.
                 if now > scheduled_time_today:
-                    next_run = scheduled_time_today.replace(day=scheduled_time_today.day + 1)
+                    next_run = scheduled_time_today + timedelta(days=1)
                     self.db.add_log('INFO',
                                     f'Scheduled daily forum scan (next run tomorrow)',
                                     {'time': scan_time, 'next_run': next_run.strftime('%Y-%m-%d %H:%M')})
@@ -83,8 +94,8 @@ class TaskScheduler:
         else:
             self.db.add_log('INFO', 'Daily forum scan is disabled')
 
-        schedule.every().monday.at("00:00").do(self._check_website_domain)
-        schedule.every(30).days.do(self._clean_old_logs)
+        self._scheduler.every().monday.at("00:00").do(self._check_website_domain)
+        self._scheduler.every(30).days.do(self._clean_old_logs)
     
     def _normalize_time(self, time_str):
         """Convert time to 24-hour format (HH:MM)"""

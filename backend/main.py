@@ -726,22 +726,29 @@ def get_stats(token: str):
 def get_scheduler_status(token: str):
     """Get current scheduler status and scheduled tasks"""
     verify_token(token)
-    import schedule
-    
+
+    def _job_name(job):
+        jf = job.job_func
+        if hasattr(jf, '__name__'):
+            return jf.__name__
+        if hasattr(jf, 'func') and hasattr(jf.func, '__name__'):
+            return jf.func.__name__
+        return str(jf)
+
     jobs_info = []
-    for job in schedule.jobs:
+    for job in scheduler.jobs:
         jobs_info.append({
             'next_run': job.next_run.isoformat() if job.next_run else None,
             'interval': str(job.interval),
             'unit': job.unit,
             'at_time': str(job.at_time) if job.at_time else None,
-            'job_func': job.job_func.__name__ if hasattr(job.job_func, '__name__') else str(job.job_func)
+            'job_func': _job_name(job)
         })
-    
+
     return {
         'running': scheduler.running,
         'jobs': jobs_info,
-        'jobs_count': len(schedule.jobs)
+        'jobs_count': len(scheduler.jobs)
     }
 
 @app.post("/api/scheduler/reload")
