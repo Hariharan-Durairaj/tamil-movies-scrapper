@@ -34,12 +34,24 @@ services:
         condition: service_healthy
     ports:
       - "8080:8080"
+    # ── Xvfb / headful-Chrome requirements ──────────────────────────────
+    # shm_size: Chrome uses /dev/shm for shared memory.  The default 64 MB
+    #           is far too small and causes tab crashes.  2 GB is safe.
+    shm_size: '2gb'
+    # SYS_ADMIN: required by undetected-chromedriver / Chrome's sandbox
+    #            inside a Docker container (same as --cap-add=SYS_ADMIN on
+    #            docker run).
+    cap_add:
+      - SYS_ADMIN
     environment:
       DB_HOST: db
       DB_PORT: "5432"
       DB_NAME: movie_automator
       DB_USER: movie_user
       DB_PASSWORD: movie_password        # must match db service above
+      # Virtual display created by Xvfb in entrypoint.sh.
+      # All child processes (including Chrome) inherit this automatically.
+      DISPLAY: ":99"
     volumes:
       - ./downloads:/app/downloads       # torrent files persisted on host
       - ./logs:/app/logs                 # log files persisted on host

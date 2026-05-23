@@ -37,13 +37,25 @@ def _make_headless_driver():
 
 
 def _make_visible_driver():
-    """Return a visible (non-headless) uc.Chrome instance (for Google)."""
+    """Return a headful uc.Chrome instance rendered on the Xvfb virtual display.
+
+    IMPORTANT: Do NOT pass --headless here.  We rely on Xvfb (DISPLAY=:99)
+    to provide a real rendering context so that Intersection-Observer-based
+    lazy-loading and JS-rendered search results are fully triggered.
+    The container CMD starts Xvfb and exports DISPLAY=:99 before this runs.
+    """
     options = uc.ChromeOptions()
-    options.add_argument("--window-size=1280,900")
+    # Required inside Docker / LXC where there is no real user session
+    options.add_argument("--no-sandbox")
+    options.add_argument("--disable-dev-shm-usage")
+    options.add_argument("--window-size=1920,1080")
     options.add_argument("--disable-blink-features=AutomationControlled")
+    options.add_argument("--disable-gpu")          # not needed with Xvfb but harmless
+    options.add_argument("--disable-extensions")
     options.add_argument(
         "--user-agent=Mozilla/5.0 (Windows NT 10.0; Win64; x64) "
-        "AppleWebKit/537.36 Chrome/146.0.0.0 Safari/537.36"
+        "AppleWebKit/537.36 (KHTML, like Gecko) "
+        "Chrome/146.0.0.0 Safari/537.36"
     )
     return uc.Chrome(version_main=146, options=options)
 
@@ -733,33 +745,42 @@ class IMDBScraper:
 # ===========================================================================
 class DomainFinder:
     """
-    Finds the current domain for a website whose TLD keeps changing
-    by searching DuckDuckGo, Bing, and Brave and returning the first
-    result URL that contains the site base name.
+    Finds the current domain for a website whose TLD keeps changing by
+    searching DuckDuckGo, Bing, and Brave with a headful Chrome browser
+    rendered on the Xvfb virtual display (DISPLAY=:99).
 
-    No browser or Selenium needed — pure HTTP requests only.
+    Why headful Chrome on Xvfb?
+    ----------------------------
+    Search-engine result pages use Intersection Observer and other
+    visibility-based lazy-loading.  A truly headless Chrome process has
+    no real rendering/viewport context, so those observers never fire and
+    the organic result links are never injected into the DOM.
+
+    Running *headful* Chrome against the Xvfb virtual framebuffer gives
+    the browser a real display to render into (1920×1080 at 24-bit colour),
+    which correctly triggers all JS-based lazy loading and makes result
+    links visible to Selenium just as they would be in a normal desktop
+    browser.
+
+    The container CMD already starts Xvfb on :99 and exports DISPLAY=:99
+    before the FastAPI process launches, so no extra setup is required here.
     """
 
-    _HEADERS = {
-        "User-Agent": (
-            "Mozilla/5.0 (Windows NT 10.0; Win64; x64) "
-            "AppleWebKit/537.36 (KHTML, like Gecko) "
-            "Chrome/124.0.0.0 Safari/537.36"
-        ),
-        "Accept": "text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8",
-        "Accept-Language": "en-US,en;q=0.5",
-        "Accept-Encoding": "gzip, deflate, br",
-        "Connection": "keep-alive",
-    }
+    # Seconds to wait for at least one result link to appear after page load
+    _RESULT_WAIT = 10
 
     def find_domain(self, website_base: str) -> Optional[str]:
         """
         Search for website_base and return the domain from the first result.
         Tries DuckDuckGo, then Bing, then Brave.
-        Returns None if all engines fail.
+        Returns None if all engines fail or if Selenium is not available.
         """
+        if not _SELENIUM_AVAILABLE:
+            print("[DOMAIN] undetected_chromedriver not available — cannot search")
+            return None
+
         base_name = website_base.replace("www.", "").split(".")[0]  # e.g. "1tamilmv"
-        print(f"[DOMAIN] Searching for: {website_base}")
+        print(f"[DOMAIN] Searching for: {website_base} (base: {base_name})")
 
         engines = [
             ("DuckDuckGo", self._search_duckduckgo),
@@ -768,39 +789,60 @@ class DomainFinder:
         ]
 
         for engine_name, search_fn in engines:
+            driver = None
             try:
-                domain = search_fn(website_base, base_name)
+                print(f"[DOMAIN] Trying {engine_name}...")
+                # Each engine gets its own fresh browser to avoid session bleed
+                driver = _make_visible_driver()
+                domain = search_fn(driver, website_base, base_name)
                 if domain:
                     print(f"[DOMAIN] {engine_name} found: {domain}")
                     return domain
                 print(f"[DOMAIN] {engine_name}: no result, trying next...")
             except Exception as e:
                 print(f"[DOMAIN] {engine_name} error: {e}")
+            finally:
+                if driver:
+                    try:
+                        driver.quit()
+                    except Exception:
+                        pass
 
         print(f"[DOMAIN] All search engines failed for: {website_base}")
         return None
 
     # ------------------------------------------------------------------
-    def _search_duckduckgo(self, website_base: str, base_name: str) -> Optional[str]:
-        """DuckDuckGo HTML — scraper-friendly, no JS needed.
-        DDG wraps result URLs as //duckduckgo.com/l/?uddg=<encoded-real-url>
-        so we unwrap the uddg parameter to get the actual domain."""
-        resp = requests.post(
-            "https://html.duckduckgo.com/html/",
-            data={"q": website_base, "b": "", "kl": "us-en"},
-            headers=self._HEADERS,
-            timeout=15,
-        )
-        resp.raise_for_status()
+    # Private per-engine search helpers
+    # Each receives an already-open driver, navigates, waits for JS to
+    # render results, then walks the DOM for a matching domain.
+    # ------------------------------------------------------------------
 
-        soup = BeautifulSoup(resp.text, "html.parser")
+    def _search_duckduckgo(self, driver, website_base: str, base_name: str) -> Optional[str]:
+        """DuckDuckGo — navigate to the HTML search page and wait for results."""
+        query = urllib.parse.quote_plus(website_base)
+        driver.get(f"https://duckduckgo.com/?q={query}&ia=web")
 
+        # Wait for at least one organic result link to appear
+        try:
+            WebDriverWait(driver, self._RESULT_WAIT).until(
+                EC.presence_of_element_located((By.CSS_SELECTOR, "a[data-testid='result-title-a']"))
+            )
+        except Exception:
+            # Fallback: just wait a moment and parse whatever is there
+            time.sleep(3)
+
+        soup = BeautifulSoup(driver.page_source, "html.parser")
+
+        # Modern DDG: result anchors have data-testid="result-title-a"
+        for a in soup.find_all("a", attrs={"data-testid": "result-title-a"}):
+            href = a.get("href", "")
+            domain = self._domain_from_url(href)
+            if domain and base_name in domain:
+                return domain
+
+        # Fallback: scan all hrefs for uddg-wrapped or direct URLs
         for a in soup.find_all("a", href=True):
             href = a["href"]
-
-            # DDG wraps every organic result URL like:
-            #   //duckduckgo.com/l/?uddg=https%3A%2F%2Fwww.1tamilmv.immo%2F&rut=...
-            # Unwrap the real URL from the uddg query parameter.
             if "duckduckgo.com/l/" in href:
                 try:
                     full = "https:" + href if href.startswith("//") else href
@@ -809,34 +851,32 @@ class DomainFinder:
                         href = uddg[0]
                 except Exception:
                     continue
-
             domain = self._domain_from_url(href)
             if domain and base_name in domain:
                 return domain
 
-        # Fallback: scan raw HTML for uddg= encoded values
-        for encoded in re.findall(r'uddg=([^&\s]+)', resp.text):
-            try:
-                real_url = urllib.parse.unquote(encoded)
-                domain = self._domain_from_url(real_url)
-                if domain and base_name in domain:
-                    return domain
-            except Exception:
-                continue
-
         return None
 
-    def _search_bing(self, website_base: str, base_name: str) -> Optional[str]:
-        """Bing web search — result links are direct hrefs."""
-        resp = requests.get(
-            "https://www.bing.com/search",
-            params={"q": website_base},
-            headers=self._HEADERS,
-            timeout=15,
-        )
-        resp.raise_for_status()
+    def _search_bing(self, driver, website_base: str, base_name: str) -> Optional[str]:
+        """Bing — navigate and wait for result cards to render."""
+        query = urllib.parse.quote_plus(website_base)
+        driver.get(f"https://www.bing.com/search?q={query}")
 
-        soup = BeautifulSoup(resp.text, "html.parser")
+        try:
+            WebDriverWait(driver, self._RESULT_WAIT).until(
+                EC.presence_of_element_located((By.CSS_SELECTOR, "li.b_algo h2 a"))
+            )
+        except Exception:
+            time.sleep(3)
+
+        soup = BeautifulSoup(driver.page_source, "html.parser")
+        for a in soup.select("li.b_algo h2 a"):
+            href = a.get("href", "")
+            domain = self._domain_from_url(href)
+            if domain and base_name in domain:
+                return domain
+
+        # Fallback: all links, skipping Bing internals
         for a in soup.find_all("a", href=True):
             href = a["href"]
             if "bing.com" in href or "microsoft.com" in href:
@@ -844,19 +884,29 @@ class DomainFinder:
             domain = self._domain_from_url(href)
             if domain and base_name in domain:
                 return domain
+
         return None
 
-    def _search_brave(self, website_base: str, base_name: str) -> Optional[str]:
-        """Brave Search — result links are direct hrefs."""
-        resp = requests.get(
-            "https://search.brave.com/search",
-            params={"q": website_base},
-            headers=self._HEADERS,
-            timeout=15,
-        )
-        resp.raise_for_status()
+    def _search_brave(self, driver, website_base: str, base_name: str) -> Optional[str]:
+        """Brave Search — navigate and wait for result snippets to appear."""
+        query = urllib.parse.quote_plus(website_base)
+        driver.get(f"https://search.brave.com/search?q={query}&source=web")
 
-        soup = BeautifulSoup(resp.text, "html.parser")
+        try:
+            WebDriverWait(driver, self._RESULT_WAIT).until(
+                EC.presence_of_element_located((By.CSS_SELECTOR, "div.snippet a.heading-serpresult"))
+            )
+        except Exception:
+            time.sleep(3)
+
+        soup = BeautifulSoup(driver.page_source, "html.parser")
+        for a in soup.select("div.snippet a.heading-serpresult"):
+            href = a.get("href", "")
+            domain = self._domain_from_url(href)
+            if domain and base_name in domain:
+                return domain
+
+        # Fallback: all links, skipping Brave internals
         for a in soup.find_all("a", href=True):
             href = a["href"]
             if "brave.com" in href:
@@ -864,6 +914,7 @@ class DomainFinder:
             domain = self._domain_from_url(href)
             if domain and base_name in domain:
                 return domain
+
         return None
 
     @staticmethod
