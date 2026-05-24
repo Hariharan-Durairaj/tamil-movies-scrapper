@@ -8,56 +8,151 @@ from bs4 import BeautifulSoup
 
 # ---------------------------------------------------------------------------
 # Optional Selenium imports — used by IMDBScraper and DomainFinder.
-# If the package is not installed the classes degrade gracefully.
 # ---------------------------------------------------------------------------
-try:
-    import undetected_chromedriver as uc
-    from selenium.webdriver.common.by import By
-    from selenium.webdriver.support.ui import WebDriverWait
-    from selenium.webdriver.support import expected_conditions as EC
-    _SELENIUM_AVAILABLE = True
-except ImportError:
-    _SELENIUM_AVAILABLE = False
+# NOTE: We do NOT set _SELENIUM_AVAILABLE at module load time here.
+# undetected-chromedriver can raise non-ImportError exceptions during import
+# (e.g. OSError when it probes for the Chrome binary) which would silently
+# set the flag to False even though the package is installed.
+# Instead, each consumer does its own lazy import and handles failures locally.
+# ---------------------------------------------------------------------------
+def _import_selenium():
+    """Lazy-import undetected-chromedriver + Selenium. Returns True on success."""
+    global uc, By, WebDriverWait, EC, _SELENIUM_AVAILABLE
+    if globals().get('_SELENIUM_AVAILABLE') is True:
+        return True
+    try:
+        import undetected_chromedriver as _uc
+        from selenium.webdriver.common.by import By as _By
+        from selenium.webdriver.support.ui import WebDriverWait as _WDW
+        from selenium.webdriver.support import expected_conditions as _EC
+        globals()['uc'] = _uc
+        globals()['By'] = _By
+        globals()['WebDriverWait'] = _WDW
+        globals()['EC'] = _EC
+        globals()['_SELENIUM_AVAILABLE'] = True
+        return True
+    except Exception as e:
+        print(f"[SELENIUM] Import failed: {e}")
+        globals()['_SELENIUM_AVAILABLE'] = False
+        return False
+
+# Attempt import at load time (best-effort; failures are non-fatal)
+_import_selenium()
 
 
 # ---------------------------------------------------------------------------
 # Driver helpers
 # ---------------------------------------------------------------------------
-def _make_headless_driver():
-    """Return a headless uc.Chrome instance (for IMDB)."""
+import os as _os
+import shutil as _shutil
+
+def _chromium_binary() -> str:
+    """
+    Return the path to the Chromium/Chrome binary.
+
+    On Debian/Ubuntu the 'chromium' apt package installs the binary at
+    /usr/bin/chromium (sometimes /usr/bin/chromium-browser).
+    undetected-chromedriver looks for 'google-chrome' / 'google-chrome-stable'
+    by default and fails to find the system Chromium unless we tell it explicitly.
+    """
+    candidates = [
+        "/usr/bin/chromium",
+        "/usr/bin/chromium-browser",
+        "/usr/bin/google-chrome",
+        "/usr/bin/google-chrome-stable",
+    ]
+    for path in candidates:
+        if _os.path.isfile(path):
+            return path
+    # Fall back to whatever is on PATH
+    found = _shutil.which("chromium") or _shutil.which("chromium-browser") or _shutil.which("google-chrome")
+    if found:
+        return found
+    raise FileNotFoundError(
+        "No Chromium/Chrome binary found. "
+        "Install 'chromium' or 'google-chrome-stable'."
+    )
+
+
+def _chromium_version() -> int:
+    """
+    Detect the installed Chromium major version at runtime by running
+    'chromium --version' and parsing the output.
+
+    This is passed to uc.Chrome(version_main=...) so undetected-chromedriver
+    downloads the matching ChromeDriver automatically — no hardcoded version
+    number that breaks every time the OS upgrades Chromium.
+    """
+    import subprocess
+    binary = _chromium_binary()
+    try:
+        out = subprocess.check_output(
+            [binary, "--version"], stderr=subprocess.DEVNULL, timeout=10
+        )
+        # e.g. "Chromium 148.0.7778.178" or "Google Chrome 148.0.7778.178 snap"
+        version_str = out.decode().strip()
+        major = int(version_str.split()[1].split(".")[0])
+        print(f"[DRIVER] Detected Chromium major version: {major}")
+        return major
+    except Exception as e:
+        print(f"[DRIVER] Could not detect Chromium version ({e}), defaulting to 148")
+        return 148
+
+
+def _chrome_options_base() -> "uc.ChromeOptions":
+    """Shared uc.ChromeOptions required in every Docker/LXC context."""
+    _import_selenium()
     options = uc.ChromeOptions()
-    options.add_argument("--headless=new")
+    options.add_argument("--no-sandbox")
+    options.add_argument("--disable-dev-shm-usage")
+    options.add_argument("--disable-gpu")
+    options.add_argument("--disable-extensions")
     options.add_argument("--window-size=1920,1080")
     options.add_argument("--disable-blink-features=AutomationControlled")
+    return options
+
+
+def _make_headless_driver():
+    """Return a headless uc.Chrome instance for IMDB (bot-bypass via uc).
+
+    version_main is detected at runtime from the installed Chromium binary
+    so it always matches, regardless of which version the OS ships.
+    """
+    _import_selenium()
+    options = _chrome_options_base()
+    options.add_argument("--headless=new")
     options.add_argument(
         "--user-agent=Mozilla/5.0 (Windows NT 10.0; Win64; x64) "
-        "AppleWebKit/537.36 Chrome/146.0.0.0 Safari/537.36"
+        "AppleWebKit/537.36 (KHTML, like Gecko) Chrome/148.0.0.0 Safari/537.36"
     )
-    return uc.Chrome(version_main=146, options=options)
+    return uc.Chrome(
+        version_main=_chromium_version(),
+        browser_executable_path=_chromium_binary(),
+        options=options,
+    )
 
 
 def _make_visible_driver():
-    """Return a headful uc.Chrome instance rendered on the Xvfb virtual display.
+    """Return a headful uc.Chrome instance on the Xvfb virtual display.
 
-    IMPORTANT: Do NOT pass --headless here.  We rely on Xvfb (DISPLAY=:99)
-    to provide a real rendering context so that Intersection-Observer-based
-    lazy-loading and JS-rendered search results are fully triggered.
-    The container CMD starts Xvfb and exports DISPLAY=:99 before this runs.
+    No --headless flag — Chrome renders into the Xvfb framebuffer at DISPLAY=:99
+    (started by entrypoint.sh), giving it a real viewport so Intersection Observer
+    and visibility-based lazy-loading fire correctly on search result pages.
+    Bot-bypass via uc is also active here (useful for Bing/Brave challenges).
+
+    version_main is detected at runtime to always match the installed Chromium.
     """
-    options = uc.ChromeOptions()
-    # Required inside Docker / LXC where there is no real user session
-    options.add_argument("--no-sandbox")
-    options.add_argument("--disable-dev-shm-usage")
-    options.add_argument("--window-size=1920,1080")
-    options.add_argument("--disable-blink-features=AutomationControlled")
-    options.add_argument("--disable-gpu")          # not needed with Xvfb but harmless
-    options.add_argument("--disable-extensions")
+    _import_selenium()
+    options = _chrome_options_base()
     options.add_argument(
         "--user-agent=Mozilla/5.0 (Windows NT 10.0; Win64; x64) "
-        "AppleWebKit/537.36 (KHTML, like Gecko) "
-        "Chrome/146.0.0.0 Safari/537.36"
+        "AppleWebKit/537.36 (KHTML, like Gecko) Chrome/148.0.0.0 Safari/537.36"
     )
-    return uc.Chrome(version_main=146, options=options)
+    return uc.Chrome(
+        version_main=_chromium_version(),
+        browser_executable_path=_chromium_binary(),
+        options=options,
+    )
 
 
 # ===========================================================================
@@ -542,8 +637,8 @@ class IMDBScraper:
         Search IMDB for *search_term*.
         Prefers an exact (case-insensitive) title match; falls back to first result.
         """
-        if not _SELENIUM_AVAILABLE:
-            print("[IMDB] undetected_chromedriver not installed — cannot search")
+        if not _import_selenium():
+            print("[IMDB] selenium not available — cannot search")
             return None
 
         driver = _make_headless_driver()
@@ -599,8 +694,8 @@ class IMDBScraper:
         Fetch IMDB movie page by IMDB ID and return rich metadata dict.
         Uses the application/ld+json script tag embedded in the page.
         """
-        if not _SELENIUM_AVAILABLE:
-            print("[IMDB] undetected_chromedriver not installed — cannot fetch by ID")
+        if not _import_selenium():
+            print("[IMDB] selenium not available — cannot fetch by ID")
             return None
 
         driver = _make_headless_driver()
@@ -775,8 +870,8 @@ class DomainFinder:
         Tries DuckDuckGo, then Bing, then Brave.
         Returns None if all engines fail or if Selenium is not available.
         """
-        if not _SELENIUM_AVAILABLE:
-            print("[DOMAIN] undetected_chromedriver not available — cannot search")
+        if not _import_selenium():
+            print("[DOMAIN] selenium not available — cannot search")
             return None
 
         base_name = website_base.replace("www.", "").split(".")[0]  # e.g. "1tamilmv"
