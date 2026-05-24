@@ -83,6 +83,9 @@ _cleanup() {
 }
 trap _cleanup TERM INT
 
+# Start Jupyter in background
+jupyter notebook --ip=0.0.0.0 --port=8888 --no-browser --allow-root --notebook-dir=/app &
+
 # ---------------------------------------------------------------------------
 # 6. Launch the FastAPI backend.
 #    DISPLAY is already exported above so every subprocess (Chrome included)
