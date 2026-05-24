@@ -42,6 +42,7 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
     xdg-utils \
     && rm -rf /var/lib/apt/lists/*
 
+RUN pip install jupyter
 # ---------------------------------------------------------------------------
 # Clone latest code
 # CACHE_BUST changes every build (pass via docker-compose or --build-arg)
