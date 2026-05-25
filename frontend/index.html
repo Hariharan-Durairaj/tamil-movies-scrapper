@@ -346,14 +346,30 @@
                                    placeholder="e.g. www.1tamilmv.cymru">
                             <small>Editing this field and clicking "Apply Domain" will update Forum URL and Search URL automatically.</small>
                         </div>
-                        <div style="display:flex;gap:1rem;flex-wrap:wrap;align-items:center;margin-top:0.5rem;">
-                            <button id="btn-find-domain" class="btn-primary">🔍 Auto-Find Domain via Google</button>
+                        <div class="form-group" style="margin-top:0.75rem;">
+                            <label>Links to scan (1–10):</label>
+                            <input type="number" id="domain-max-candidates" min="1" max="10" value="5"
+                                   style="width:80px;padding:0.4rem 0.6rem;border-radius:6px;border:1px solid var(--border-color);background:var(--input-bg,var(--card-bg));color:var(--text-primary);">
+                            <small style="margin-left:0.5rem;">Auto-Find will open each link in Chrome and verify it's the real site before accepting it.</small>
+                        </div>
+                        <div style="display:flex;gap:1rem;flex-wrap:wrap;align-items:center;margin-top:0.75rem;">
+                            <button id="btn-find-domain" class="btn-primary">🔍 Auto-Find Domain</button>
                             <button id="btn-apply-domain" class="btn-secondary">✓ Apply Domain</button>
                             <span id="domain-status" class="status-indicator"></span>
                         </div>
                         <p style="color:var(--text-secondary);font-size:0.85rem;margin-top:0.75rem;">
-                            ⚠️ Auto-Find opens a visible Chrome window (required — Google blocks headless mode). Do not close it.
+                            ⚠️ Auto-Find opens visible Chrome windows to verify each candidate. This may take 30–60 seconds. Do not close them.
                         </p>
+                        <!-- Candidates fallback — shown when auto-verify fails -->
+                        <div id="domain-candidates-section" style="display:none;margin-top:1.25rem;">
+                            <hr style="border-color:var(--border-color);margin-bottom:1rem;">
+                            <p style="font-weight:600;margin-bottom:0.5rem;">⚠️ Could not verify any candidate automatically. Links found:</p>
+                            <p style="color:var(--text-secondary);font-size:0.85rem;margin-bottom:0.75rem;">
+                                These URLs were found in search results but did not pass the fingerprint check.
+                                The correct one is likely the first result — click "Use This" to set it as the domain.
+                            </p>
+                            <div id="domain-candidates-list" style="display:flex;flex-direction:column;gap:0.5rem;"></div>
+                        </div>
                     </div>
                     <div class="card">
                         <h3>Current URLs (auto-updated)</h3>

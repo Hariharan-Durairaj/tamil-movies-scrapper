@@ -1271,33 +1271,81 @@ document.addEventListener('DOMContentLoaded', () => {
     if (findDomainBtn) {
         findDomainBtn.addEventListener('click', async () => {
             const statusEl = document.getElementById('domain-status');
-            statusEl.textContent = 'Searching... (Chrome window will open)';
+            const candidatesSection = document.getElementById('domain-candidates-section');
+            const candidatesList = document.getElementById('domain-candidates-list');
+            const maxCandidatesInput = document.getElementById('domain-max-candidates');
+            const maxCandidates = parseInt(maxCandidatesInput?.value || '5', 10);
+
+            // Hide any previous candidates
+            candidatesSection.style.display = 'none';
+            candidatesList.innerHTML = '';
+
+            statusEl.textContent = `Searching & verifying up to ${maxCandidates} link(s)… this may take a minute.`;
             statusEl.className = 'status-indicator';
             findDomainBtn.disabled = true;
+
             try {
-                const response = await apiCall('/api/settings/find-domain', { method: 'POST' });
+                const response = await apiCall(
+                    `/api/settings/find-domain?max_candidates=${maxCandidates}`,
+                    { method: 'POST' }
+                );
                 const data = await response.json();
-                if (data.success && data.domain) {
+
+                if (data.success && data.verified && data.domain) {
+                    // Verified — update the domain field directly
                     document.getElementById('setting-full-domain').value = data.domain;
-                    statusEl.textContent = `✓ Found: ${data.domain}`;
-                    statusEl.classList.add('success');
-                    showToast(`Domain found: ${data.domain} — click "Apply Domain" to update URLs.`, 'success');
+                    statusEl.textContent = `✓ Verified: ${data.domain}`;
+                    statusEl.className = 'status-indicator success';
+                    showToast(`Domain verified: ${data.domain} — click "Apply Domain" to update URLs.`, 'success');
+
+                } else if (data.candidates && data.candidates.length > 0) {
+                    // Candidates found but none passed verification — show manual list
+                    statusEl.textContent = `⚠ Could not verify — ${data.candidates.length} candidate(s) found`;
+                    statusEl.className = 'status-indicator warning';
+                    showToast('Auto-verify failed. Choose manually from the list below.', 'warning');
+
+                    data.candidates.forEach((url, i) => {
+                        const domain = (() => {
+                            try { return new URL(url).hostname; } catch { return url; }
+                        })();
+                        const row = document.createElement('div');
+                        row.style.cssText = 'display:flex;align-items:center;gap:0.75rem;padding:0.5rem 0.75rem;background:var(--input-bg,var(--card-bg));border:1px solid var(--border-color);border-radius:6px;';
+                        row.innerHTML = `
+                            <span style="min-width:1.5rem;color:var(--text-secondary);font-size:0.85rem;">#${i + 1}</span>
+                            <span style="flex:1;font-family:monospace;font-size:0.9rem;word-break:break-all;">${url}</span>
+                            <button class="btn-secondary" style="white-space:nowrap;padding:0.3rem 0.75rem;font-size:0.85rem;"
+                                    data-domain="${domain}">Use This</button>`;
+                        row.querySelector('button').addEventListener('click', () => {
+                            document.getElementById('setting-full-domain').value = domain;
+                            statusEl.textContent = `✓ Set to: ${domain}`;
+                            statusEl.className = 'status-indicator success';
+                            candidatesSection.style.display = 'none';
+                            showToast(`Domain set to ${domain} — click "Apply Domain" to update URLs.`, 'success');
+                        });
+                        candidatesList.appendChild(row);
+                    });
+                    candidatesSection.style.display = 'block';
+
                 } else {
+                    // Nothing found at all
                     statusEl.textContent = 'Not found ✗';
-                    statusEl.classList.add('error');
-                    showToast('Could not find domain automatically. Try editing the field manually.', 'warning');
+                    statusEl.className = 'status-indicator error';
+                    showToast('Could not find any candidates. Try editing the field manually.', 'warning');
                 }
             } catch (err) {
                 statusEl.textContent = 'Error ✗';
-                statusEl.classList.add('error');
+                statusEl.className = 'status-indicator error';
                 showToast('Domain search error', 'error');
                 console.error(err);
             } finally {
                 findDomainBtn.disabled = false;
-                setTimeout(() => {
-                    statusEl.textContent = '';
-                    statusEl.className = 'status-indicator';
-                }, 6000);
+                // Only auto-clear the status if it was a success (not candidate list)
+                if (statusEl.className.includes('success') && !candidatesSection.style.display === 'block') {
+                    setTimeout(() => {
+                        statusEl.textContent = '';
+                        statusEl.className = 'status-indicator';
+                    }, 8000);
+                }
             }
         });
     }

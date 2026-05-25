@@ -840,62 +840,89 @@ class IMDBScraper:
 # ===========================================================================
 class DomainFinder:
     """
-    Finds the current domain for a website whose TLD keeps changing by
-    searching DuckDuckGo, Bing, and Brave with a headful Chrome browser
-    rendered on the Xvfb virtual display (DISPLAY=:99).
+    Finds the current domain for a website whose TLD keeps changing.
 
-    Why headful Chrome on Xvfb?
-    ----------------------------
-    Search-engine result pages use Intersection Observer and other
-    visibility-based lazy-loading.  A truly headless Chrome process has
-    no real rendering/viewport context, so those observers never fire and
-    the organic result links are never injected into the DOM.
+    Strategy:
+    1. Search DuckDuckGo (then Bing, then Brave) for the site base name.
+    2. Collect up to `max_candidates` result URLs that contain the base name.
+    3. For each candidate (in order), open it in Chrome, follow any redirects,
+       land on the final URL, then verify it is the genuine site by checking
+       for at least 2 of 3 known fingerprint strings in the page source.
+    4. If verified → return that domain immediately.
+    5. If no candidate passes verification → return all candidates so the
+       frontend can show them for manual selection.
 
-    Running *headful* Chrome against the Xvfb virtual framebuffer gives
-    the browser a real display to render into (1920×1080 at 24-bit colour),
-    which correctly triggers all JS-based lazy loading and makes result
-    links visible to Selenium just as they would be in a normal desktop
-    browser.
+    Why follow redirects?
+    ---------------------
+    Search engines often list the old domain. When you click the link it
+    redirects to the new domain. Chrome.get() follows HTTP and JS redirects
+    automatically, so driver.current_url after page load gives us the real
+    current domain, not the stale one shown in the search result.
 
-    The container CMD already starts Xvfb on :99 and exports DISPLAY=:99
-    before the FastAPI process launches, so no extra setup is required here.
+    Fingerprint strings (2-of-3 required):
+    - G-15B7F5LNBT      Google Analytics ID unique to 1TamilMV
+    - t.me/tmvog         Telegram channel handle
+    - data-focus-cookie='34'  Theme cookie baked into the HTML tag
     """
 
-    # Seconds to wait for at least one result link to appear after page load
-    _RESULT_WAIT = 10
+    _RESULT_WAIT = 10   # seconds to wait for search result links
 
-    def find_domain(self, website_base: str) -> Optional[str]:
+    # At least this many fingerprints must be present to consider verified
+    _VERIFY_MIN_MATCHES = 2
+    _FINGERPRINTS = [
+        "G-15B7F5LNBT",           # Google Analytics ID
+        "t.me/tmvog",              # Telegram channel
+        "data-focus-cookie='34'",  # Theme cookie ID
+    ]
+
+    # ------------------------------------------------------------------
+    # Public API
+    # ------------------------------------------------------------------
+
+    def find_domain(self, website_base: str, max_candidates: int = 5) -> Dict:
         """
-        Search for website_base and return the domain from the first result.
-        Tries DuckDuckGo, then Bing, then Brave.
-        Returns None if all engines fail or if Selenium is not available.
+        Search for website_base and return a result dict:
+
+        On verified success:
+            {"verified": True,  "domain": "www.1tamilmv.xyz",  "candidates": [...]}
+
+        On failure (no candidate passed verification):
+            {"verified": False, "domain": None, "candidates": ["www.1tamilmv.old", ...]}
+
+        `candidates` always contains every URL found so the frontend can
+        offer a manual-selection fallback.
         """
         if not _import_selenium():
             print("[DOMAIN] selenium not available — cannot search")
-            return None
+            return {"verified": False, "domain": None, "candidates": []}
 
-        base_name = website_base.replace("www.", "").split(".")[0]  # e.g. "1tamilmv"
-        print(f"[DOMAIN] Searching for: {website_base} (base: {base_name})")
+        base_name = website_base.replace("www.", "").split(".")[0]
+        print(f"[DOMAIN] Searching for: {website_base} (base: {base_name}, max_candidates: {max_candidates})")
 
         engines = [
-            ("DuckDuckGo", self._search_duckduckgo),
-            ("Bing",       self._search_bing),
-            ("Brave",      self._search_brave),
+            ("DuckDuckGo", self._collect_duckduckgo),
+            ("Bing",       self._collect_bing),
+            ("Brave",      self._collect_brave),
         ]
 
-        for engine_name, search_fn in engines:
+        all_candidates: list = []
+
+        for engine_name, collect_fn in engines:
+            if len(all_candidates) >= max_candidates:
+                break
             driver = None
             try:
-                print(f"[DOMAIN] Trying {engine_name}...")
-                # Each engine gets its own fresh browser to avoid session bleed
+                print(f"[DOMAIN] Collecting candidates from {engine_name}...")
                 driver = _make_visible_driver()
-                domain = search_fn(driver, website_base, base_name)
-                if domain:
-                    print(f"[DOMAIN] {engine_name} found: {domain}")
-                    return domain
-                print(f"[DOMAIN] {engine_name}: no result, trying next...")
+                found = collect_fn(driver, website_base, base_name, max_candidates)
+                print(f"[DOMAIN] {engine_name} found {len(found)} candidate(s): {found}")
+                for url in found:
+                    if url not in all_candidates:
+                        all_candidates.append(url)
+                    if len(all_candidates) >= max_candidates:
+                        break
             except Exception as e:
-                print(f"[DOMAIN] {engine_name} error: {e}")
+                print(f"[DOMAIN] {engine_name} collection error: {e}")
             finally:
                 if driver:
                     try:
@@ -903,60 +930,118 @@ class DomainFinder:
                     except Exception:
                         pass
 
-        print(f"[DOMAIN] All search engines failed for: {website_base}")
+        if not all_candidates:
+            print("[DOMAIN] No candidates found in any search engine")
+            return {"verified": False, "domain": None, "candidates": []}
+
+        print(f"[DOMAIN] Total candidates to verify: {all_candidates}")
+
+        # Verify each candidate in order
+        for i, candidate_url in enumerate(all_candidates):
+            print(f"[DOMAIN] Verifying candidate {i+1}/{len(all_candidates)}: {candidate_url}")
+            driver = None
+            try:
+                driver = _make_visible_driver()
+                result = self._verify_candidate(driver, candidate_url)
+                if result:
+                    print(f"[DOMAIN] Verified! Final domain: {result}")
+                    return {"verified": True, "domain": result, "candidates": all_candidates}
+                else:
+                    print(f"[DOMAIN] Candidate {candidate_url} failed verification")
+            except Exception as e:
+                print(f"[DOMAIN] Verification error for {candidate_url}: {e}")
+            finally:
+                if driver:
+                    try:
+                        driver.quit()
+                    except Exception:
+                        pass
+
+        print("[DOMAIN] All candidates failed verification — returning list for manual selection")
+        return {"verified": False, "domain": None, "candidates": all_candidates}
+
+    # ------------------------------------------------------------------
+    # Verification
+    # ------------------------------------------------------------------
+
+    def _verify_candidate(self, driver, url: str) -> Optional[str]:
+        """
+        Open `url` in Chrome, wait for page load, follow any redirects,
+        then check the page source for fingerprint strings.
+
+        Returns the FINAL domain (after redirects) if verified, else None.
+
+        Key insight: search engines list stale domains. When Chrome loads
+        the link and the site has moved, it redirects automatically.
+        driver.current_url after load gives the real current domain.
+        """
+        if not url.startswith("http"):
+            url = "https://" + url
+        try:
+            driver.get(url)
+            # Wait for body to be present — confirms page actually loaded
+            WebDriverWait(driver, 15).until(
+                EC.presence_of_element_located((By.TAG_NAME, "body"))
+            )
+        except Exception as e:
+            print(f"[DOMAIN] Page load failed for {url}: {e}")
+            return None
+
+        # Get the final URL after all redirects
+        final_url = driver.current_url
+        final_domain = self._domain_from_url(final_url)
+        print(f"[DOMAIN] Landed on: {final_url} (domain: {final_domain})")
+
+        # Check fingerprints against page source
+        page_source = driver.page_source
+        matches = [fp for fp in self._FINGERPRINTS if fp in page_source]
+        print(f"[DOMAIN] Fingerprint matches: {matches} ({len(matches)}/{len(self._FINGERPRINTS)})")
+
+        if len(matches) >= self._VERIFY_MIN_MATCHES:
+            return final_domain
         return None
 
     # ------------------------------------------------------------------
-    # Private per-engine search helpers
-    # Each receives an already-open driver, navigates, waits for JS to
-    # render results, then walks the DOM for a matching domain.
+    # Per-engine candidate collectors
+    # Each returns a list of full URLs (not just domains) containing base_name
     # ------------------------------------------------------------------
 
-    def _search_duckduckgo(self, driver, website_base: str, base_name: str) -> Optional[str]:
-        """DuckDuckGo — navigate to the HTML search page and wait for results."""
+    def _collect_duckduckgo(self, driver, website_base: str, base_name: str, limit: int) -> list:
         query = urllib.parse.quote_plus(website_base)
         driver.get(f"https://duckduckgo.com/?q={query}&ia=web")
-
-        # Wait for at least one organic result link to appear
         try:
             WebDriverWait(driver, self._RESULT_WAIT).until(
                 EC.presence_of_element_located((By.CSS_SELECTOR, "a[data-testid='result-title-a']"))
             )
         except Exception:
-            # Fallback: just wait a moment and parse whatever is there
             time.sleep(3)
 
         soup = BeautifulSoup(driver.page_source, "html.parser")
+        results = []
 
-        # Modern DDG: result anchors have data-testid="result-title-a"
+        # Primary: data-testid result anchors (in DOM order = search ranking order)
         for a in soup.find_all("a", attrs={"data-testid": "result-title-a"}):
             href = a.get("href", "")
-            domain = self._domain_from_url(href)
-            if domain and base_name in domain:
-                return domain
+            url = self._resolve_ddg_url(href)
+            if url and base_name in url and url not in results:
+                results.append(url)
+            if len(results) >= limit:
+                return results
 
-        # Fallback: scan all hrefs for uddg-wrapped or direct URLs
+        # Fallback: all hrefs
         for a in soup.find_all("a", href=True):
             href = a["href"]
-            if "duckduckgo.com/l/" in href:
-                try:
-                    full = "https:" + href if href.startswith("//") else href
-                    uddg = urllib.parse.parse_qs(urllib.parse.urlparse(full).query).get("uddg", [])
-                    if uddg:
-                        href = uddg[0]
-                except Exception:
-                    continue
-            domain = self._domain_from_url(href)
-            if domain and base_name in domain:
-                return domain
+            url = self._resolve_ddg_url(href)
+            if url and base_name in url and url not in results:
+                results.append(url)
+            if len(results) >= limit:
+                return results
 
-        return None
+        return results
 
-    def _search_bing(self, driver, website_base: str, base_name: str) -> Optional[str]:
-        """Bing — navigate and wait for result cards to render."""
+    def _collect_bing(self, driver, website_base: str, base_name: str, limit: int) -> list:
         query = urllib.parse.quote_plus(website_base)
         driver.get(f"https://www.bing.com/search?q={query}")
-
         try:
             WebDriverWait(driver, self._RESULT_WAIT).until(
                 EC.presence_of_element_located((By.CSS_SELECTOR, "li.b_algo h2 a"))
@@ -965,28 +1050,29 @@ class DomainFinder:
             time.sleep(3)
 
         soup = BeautifulSoup(driver.page_source, "html.parser")
+        results = []
+
         for a in soup.select("li.b_algo h2 a"):
             href = a.get("href", "")
-            domain = self._domain_from_url(href)
-            if domain and base_name in domain:
-                return domain
+            if href.startswith("http") and base_name in href and href not in results:
+                results.append(href)
+            if len(results) >= limit:
+                return results
 
-        # Fallback: all links, skipping Bing internals
         for a in soup.find_all("a", href=True):
             href = a["href"]
             if "bing.com" in href or "microsoft.com" in href:
                 continue
-            domain = self._domain_from_url(href)
-            if domain and base_name in domain:
-                return domain
+            if href.startswith("http") and base_name in href and href not in results:
+                results.append(href)
+            if len(results) >= limit:
+                return results
 
-        return None
+        return results
 
-    def _search_brave(self, driver, website_base: str, base_name: str) -> Optional[str]:
-        """Brave Search — navigate and wait for result snippets to appear."""
+    def _collect_brave(self, driver, website_base: str, base_name: str, limit: int) -> list:
         query = urllib.parse.quote_plus(website_base)
         driver.get(f"https://search.brave.com/search?q={query}&source=web")
-
         try:
             WebDriverWait(driver, self._RESULT_WAIT).until(
                 EC.presence_of_element_located((By.CSS_SELECTOR, "div.snippet a.heading-serpresult"))
@@ -995,21 +1081,45 @@ class DomainFinder:
             time.sleep(3)
 
         soup = BeautifulSoup(driver.page_source, "html.parser")
+        results = []
+
         for a in soup.select("div.snippet a.heading-serpresult"):
             href = a.get("href", "")
-            domain = self._domain_from_url(href)
-            if domain and base_name in domain:
-                return domain
+            if href.startswith("http") and base_name in href and href not in results:
+                results.append(href)
+            if len(results) >= limit:
+                return results
 
-        # Fallback: all links, skipping Brave internals
         for a in soup.find_all("a", href=True):
             href = a["href"]
             if "brave.com" in href:
                 continue
-            domain = self._domain_from_url(href)
-            if domain and base_name in domain:
-                return domain
+            if href.startswith("http") and base_name in href and href not in results:
+                results.append(href)
+            if len(results) >= limit:
+                return results
 
+        return results
+
+    # ------------------------------------------------------------------
+    # Helpers
+    # ------------------------------------------------------------------
+
+    @staticmethod
+    def _resolve_ddg_url(href: str) -> Optional[str]:
+        """Unwrap DDG redirect URLs and return the real destination URL."""
+        if not href:
+            return None
+        if "duckduckgo.com/l/" in href:
+            try:
+                full = "https:" + href if href.startswith("//") else href
+                uddg = urllib.parse.parse_qs(urllib.parse.urlparse(full).query).get("uddg", [])
+                if uddg:
+                    return uddg[0]
+            except Exception:
+                return None
+        if href.startswith("http"):
+            return href
         return None
 
     @staticmethod

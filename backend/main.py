@@ -533,20 +533,35 @@ def add_movie_to_radarr(movie_id: int, token: str):
 # Domain finder — find current 1tamilmv domain via Google
 # ---------------------------------------------------------------------------
 @app.post("/api/settings/find-domain")
-def find_domain(token: str):
+def find_domain(token: str, max_candidates: int = 5):
     verify_token(token)
     try:
         from api_clients import DomainFinder
         website_base = db.get_setting('website_base', '1tamilmv')
-        db.add_log('INFO', f'Running domain search for: {website_base}')
+        db.add_log('INFO', f'Running domain search for: {website_base} (max_candidates={max_candidates})')
         finder = DomainFinder()
-        domain = finder.find_domain(website_base)
-        if domain:
-            db.add_log('INFO', f'Domain finder result: {domain}', {'website_base': website_base})
-            return {"success": True, "domain": domain}
+        result = finder.find_domain(website_base, max_candidates=max_candidates)
+
+        if result.get("verified") and result.get("domain"):
+            domain = result["domain"]
+            db.add_log('INFO', f'Domain finder verified: {domain}', {'website_base': website_base})
+            return {
+                "success": True,
+                "verified": True,
+                "domain": domain,
+                "candidates": result.get("candidates", []),
+            }
         else:
-            db.add_log('WARNING', f'Domain finder could not locate domain for: {website_base}')
-            return {"success": False, "domain": None}
+            candidates = result.get("candidates", [])
+            db.add_log('WARNING',
+                       f'Domain finder could not verify domain for: {website_base}. '
+                       f'Candidates: {candidates}')
+            return {
+                "success": False,
+                "verified": False,
+                "domain": None,
+                "candidates": candidates,
+            }
     except Exception as e:
         db.add_log('ERROR', f'Domain finder error: {e}', exc_info=e)
         raise HTTPException(status_code=500, detail=str(e))
