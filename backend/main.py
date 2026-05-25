@@ -533,18 +533,19 @@ def add_movie_to_radarr(movie_id: int, token: str):
 # Domain finder — find current 1tamilmv domain via Google
 # ---------------------------------------------------------------------------
 @app.post("/api/settings/find-domain")
-def find_domain(token: str, max_candidates: int = 5):
+def find_domain(token: str, max_candidates: int = 5, search_term: str = ""):
     verify_token(token)
     try:
         from api_clients import DomainFinder
         website_base = db.get_setting('website_base', '1tamilmv')
-        db.add_log('INFO', f'Running domain search for: {website_base} (max_candidates={max_candidates})')
+        query = search_term.strip() if search_term.strip() else website_base
+        db.add_log('INFO', f'Running domain search: query="{query}" max_candidates={max_candidates}')
         finder = DomainFinder()
-        result = finder.find_domain(website_base, max_candidates=max_candidates)
+        result = finder.find_domain(website_base, max_candidates=max_candidates, search_term=search_term)
 
         if result.get("verified") and result.get("domain"):
             domain = result["domain"]
-            db.add_log('INFO', f'Domain finder verified: {domain}', {'website_base': website_base})
+            db.add_log('INFO', f'Domain finder verified: {domain}')
             return {
                 "success": True,
                 "verified": True,
@@ -554,8 +555,7 @@ def find_domain(token: str, max_candidates: int = 5):
         else:
             candidates = result.get("candidates", [])
             db.add_log('WARNING',
-                       f'Domain finder could not verify domain for: {website_base}. '
-                       f'Candidates: {candidates}')
+                       f'Domain finder could not verify domain. Candidates: {candidates}')
             return {
                 "success": False,
                 "verified": False,

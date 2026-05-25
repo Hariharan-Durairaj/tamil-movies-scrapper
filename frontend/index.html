@@ -346,20 +346,23 @@
                                    placeholder="e.g. www.1tamilmv.cymru">
                             <small>Editing this field and clicking "Apply Domain" will update Forum URL and Search URL automatically.</small>
                         </div>
-                        <div class="form-group" style="margin-top:0.75rem;">
-                            <label>Links to scan (1–10):</label>
-                            <input type="number" id="domain-max-candidates" min="1" max="10" value="5"
-                                   style="width:80px;padding:0.4rem 0.6rem;border-radius:6px;border:1px solid var(--border-color);background:var(--input-bg,var(--card-bg));color:var(--text-primary);">
-                            <small style="margin-left:0.5rem;">Auto-Find will open each link in Chrome and verify it's the real site before accepting it.</small>
+                        <div style="display:flex;gap:1rem;flex-wrap:wrap;align-items:flex-end;margin-top:0.75rem;">
+                            <div class="form-group" style="margin:0;flex:1;min-width:160px;">
+                                <label>Search term:</label>
+                                <input type="text" id="domain-search-term" value="1tamilmv"
+                                       style="width:100%;padding:0.4rem 0.6rem;border-radius:6px;border:1px solid var(--border-color);background:var(--input-bg,var(--card-bg));color:var(--text-primary);">
+                            </div>
+                            <div class="form-group" style="margin:0;">
+                                <label>Links to scan:</label>
+                                <input type="number" id="domain-max-candidates" min="1" max="10" value="5"
+                                       style="width:70px;padding:0.4rem 0.6rem;border-radius:6px;border:1px solid var(--border-color);background:var(--input-bg,var(--card-bg));color:var(--text-primary);">
+                            </div>
                         </div>
                         <div style="display:flex;gap:1rem;flex-wrap:wrap;align-items:center;margin-top:0.75rem;">
                             <button id="btn-find-domain" class="btn-primary">🔍 Auto-Find Domain</button>
                             <button id="btn-apply-domain" class="btn-secondary">✓ Apply Domain</button>
                             <span id="domain-status" class="status-indicator"></span>
                         </div>
-                        <p style="color:var(--text-secondary);font-size:0.85rem;margin-top:0.75rem;">
-                            ⚠️ Auto-Find opens visible Chrome windows to verify each candidate. This may take 30–60 seconds. Do not close them.
-                        </p>
                         <!-- Candidates fallback — shown when auto-verify fails -->
                         <div id="domain-candidates-section" style="display:none;margin-top:1.25rem;">
                             <hr style="border-color:var(--border-color);margin-bottom:1rem;">

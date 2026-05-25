@@ -1274,7 +1274,9 @@ document.addEventListener('DOMContentLoaded', () => {
             const candidatesSection = document.getElementById('domain-candidates-section');
             const candidatesList = document.getElementById('domain-candidates-list');
             const maxCandidatesInput = document.getElementById('domain-max-candidates');
+            const searchTermInput = document.getElementById('domain-search-term');
             const maxCandidates = parseInt(maxCandidatesInput?.value || '5', 10);
+            const searchTerm = encodeURIComponent((searchTermInput?.value || '1tamilmv').trim());
 
             // Hide any previous candidates
             candidatesSection.style.display = 'none';
@@ -1286,7 +1288,7 @@ document.addEventListener('DOMContentLoaded', () => {
 
             try {
                 const response = await apiCall(
-                    `/api/settings/find-domain?max_candidates=${maxCandidates}`,
+                    `/api/settings/find-domain?max_candidates=${maxCandidates}&search_term=${searchTerm}`,
                     { method: 'POST' }
                 );
                 const data = await response.json();

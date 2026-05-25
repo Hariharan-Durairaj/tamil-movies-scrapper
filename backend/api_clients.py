@@ -879,7 +879,7 @@ class DomainFinder:
     # Public API
     # ------------------------------------------------------------------
 
-    def find_domain(self, website_base: str, max_candidates: int = 5) -> Dict:
+    def find_domain(self, website_base: str, max_candidates: int = 5, search_term: str = "") -> Dict:
         """
         Search for website_base and return a result dict:
 
@@ -891,15 +891,19 @@ class DomainFinder:
 
         `candidates` always contains every URL found so the frontend can
         offer a manual-selection fallback.
+
+        search_term overrides the query used in all engines. Defaults to website_base.
         """
         if not _import_selenium():
             print("[DOMAIN] selenium not available — cannot search")
             return {"verified": False, "domain": None, "candidates": []}
 
         base_name = website_base.replace("www.", "").split(".")[0]
-        print(f"[DOMAIN] Searching for: {website_base} (base: {base_name}, max_candidates: {max_candidates})")
+        query = search_term.strip() if search_term.strip() else website_base
+        print(f"[DOMAIN] Searching for: {query} (base: {base_name}, max_candidates: {max_candidates})")
 
         engines = [
+            ("Google",     self._collect_google),
             ("DuckDuckGo", self._collect_duckduckgo),
             ("Bing",       self._collect_bing),
             ("Brave",      self._collect_brave),
@@ -914,7 +918,7 @@ class DomainFinder:
             try:
                 print(f"[DOMAIN] Collecting candidates from {engine_name}...")
                 driver = _make_visible_driver()
-                found = collect_fn(driver, website_base, base_name, max_candidates)
+                found = collect_fn(driver, query, base_name, max_candidates)
                 print(f"[DOMAIN] {engine_name} found {len(found)} candidate(s): {found}")
                 for url in found:
                     if url not in all_candidates:
@@ -1005,6 +1009,46 @@ class DomainFinder:
     # Per-engine candidate collectors
     # Each returns a list of full URLs (not just domains) containing base_name
     # ------------------------------------------------------------------
+
+    def _collect_google(self, driver, website_base: str, base_name: str, limit: int) -> list:
+        """Google Search — primary engine, best ranking quality."""
+        query = urllib.parse.quote_plus(website_base)
+        driver.get(f"https://www.google.com/search?q={query}&hl=en")
+        try:
+            WebDriverWait(driver, self._RESULT_WAIT).until(
+                EC.presence_of_element_located((By.CSS_SELECTOR, "div#search a[jsname]"))
+            )
+        except Exception:
+            time.sleep(3)
+
+        soup = BeautifulSoup(driver.page_source, "html.parser")
+        results = []
+
+        # Google organic results: <a jsname="..."> inside div#search
+        for a in soup.select("div#search a[jsname]"):
+            href = a.get("href", "")
+            if href.startswith("http") and base_name in href and href not in results:
+                # Strip Google's /url?q= wrapper if present
+                parsed = urllib.parse.urlparse(href)
+                if parsed.path == "/url":
+                    real = urllib.parse.parse_qs(parsed.query).get("q", [href])[0]
+                    href = real
+                if base_name in href and href not in results:
+                    results.append(href)
+            if len(results) >= limit:
+                return results
+
+        # Fallback: all links in search results area
+        for a in soup.select("div#search a[href]"):
+            href = a["href"]
+            if href.startswith("/url?"):
+                href = urllib.parse.parse_qs(urllib.parse.urlparse("https://google.com" + href).query).get("q", [""])[0]
+            if href.startswith("http") and base_name in href and "google.com" not in href and href not in results:
+                results.append(href)
+            if len(results) >= limit:
+                return results
+
+        return results
 
     def _collect_duckduckgo(self, driver, website_base: str, base_name: str, limit: int) -> list:
         query = urllib.parse.quote_plus(website_base)
