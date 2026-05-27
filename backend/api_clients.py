@@ -868,7 +868,7 @@ class DomainFinder:
     _RESULT_WAIT = 10   # seconds to wait for search result links
 
     # At least this many fingerprints must be present to consider verified
-    _VERIFY_MIN_MATCHES = 2
+    _VERIFY_MIN_MATCHES = 1
     _FINGERPRINTS = [
         "G-15B7F5LNBT",           # Google Analytics ID
         "t.me/tmvog",              # Telegram channel
