@@ -141,6 +141,10 @@ class Database:
             cur.execute('CREATE INDEX IF NOT EXISTS idx_logs_level         ON logs(level)')
 
             # -- Migrations: safe to run on existing databases --
+            # Visible flag for failed torrent downloads
+            cur.execute('ALTER TABLE movies ADD COLUMN IF NOT EXISTS download_failed BOOLEAN DEFAULT FALSE')
+            # Rip type (WEB-DL / HDRip / etc.) per torrent variant
+            cur.execute('ALTER TABLE movie_qualities ADD COLUMN IF NOT EXISTS rip_type TEXT')
             # Make torrent_name nullable if it was created NOT NULL
             cur.execute('''
                 DO $$
@@ -256,9 +260,9 @@ class Database:
                     title, year, original_language, imdb_id, imdb_rating, tmdb_id,
                     poster_url, forum_url, search_url, is_downloaded, downloaded_quality,
                     file_size, torrent_url, torrent_name, added_to_radarr,
-                    added_to_qbittorrent, source, rejection_reason, updated_at
+                    added_to_qbittorrent, source, rejection_reason, download_failed, updated_at
                 ) VALUES (
-                    %s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,NOW()
+                    %s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,NOW()
                 ) RETURNING id
             ''', (
                 movie_data.get('title'),
@@ -279,6 +283,7 @@ class Database:
                 movie_data.get('added_to_qbittorrent', False),
                 movie_data.get('source'),
                 movie_data.get('rejection_reason'),
+                movie_data.get('download_failed', False),
             ))
             return cur.fetchone()[0]
 
@@ -362,14 +367,15 @@ class Database:
         with self.get_connection() as conn:
             cur = conn.cursor()
             cur.execute('''
-                INSERT INTO movie_qualities (movie_id, quality, file_size, torrent_url, torrent_name)
-                VALUES (%s, %s, %s, %s, %s)
+                INSERT INTO movie_qualities (movie_id, quality, file_size, torrent_url, torrent_name, rip_type)
+                VALUES (%s, %s, %s, %s, %s, %s)
             ''', (
                 movie_id,
                 quality,
                 quality_data.get('file_size'),
                 quality_data.get('torrent_url'),
                 quality_data.get('torrent_name'),
+                quality_data.get('rip_type'),
             ))
 
     def get_movie_qualities(self, movie_id):

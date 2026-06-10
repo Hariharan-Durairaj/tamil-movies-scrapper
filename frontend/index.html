@@ -30,6 +30,7 @@
                 <a href="#" data-page="dashboard" class="nav-link active">Dashboard</a>
                 <a href="#" data-page="search" class="nav-link">Search</a>
                 <a href="#" data-page="movies" class="nav-link">Movies</a>
+                <a href="#" data-page="fullscan" class="nav-link">Full Forum Scanner</a>
                 <a href="#" data-page="settings" class="nav-link">Settings</a>
                 <a href="#" data-page="logs" class="nav-link">Logs</a>
                 <a href="#" id="logout-btn" class="nav-link">Logout</a>
@@ -124,6 +125,46 @@
                 </div>
 
                 <div id="movies-list" class="movies-grid"></div>
+            </div>
+
+            <!-- Full Forum Scanner Page -->
+            <div id="page-fullscan" class="page">
+                <h2>Full Forum Scanner</h2>
+
+                <div class="card">
+                    <p style="color:var(--text-secondary);margin-bottom:1rem;">
+                        Scans the <strong>entire forum</strong> from page 1 to the last page.
+                        Total pages are detected automatically. Each new movie goes through the
+                        normal rating/quality workflow and only <strong>1080p</strong> torrents are
+                        downloaded. Movies with multiple 1080p options will wait below for you to
+                        choose which torrent to send to qBittorrent.
+                    </p>
+                    <div style="display:flex;gap:0.75rem;flex-wrap:wrap;align-items:center;">
+                        <button id="btn-start-full-scan" class="btn-primary">▶ Start Full Scan</button>
+                        <button id="btn-cancel-full-scan" class="btn-danger" style="display:none;">■ Cancel Scan</button>
+                        <span id="full-scan-status-text" style="color:var(--text-secondary);font-size:0.9rem;"></span>
+                    </div>
+
+                    <!-- Progress bar (pages) -->
+                    <div id="full-scan-progress-wrap" style="display:none;margin-top:1.25rem;">
+                        <div style="display:flex;justify-content:space-between;font-size:0.85rem;color:var(--text-secondary);margin-bottom:0.35rem;">
+                            <span id="full-scan-progress-label">Page 0 of 0</span>
+                            <span id="full-scan-progress-pct">0%</span>
+                        </div>
+                        <div class="progress-bar-track">
+                            <div id="full-scan-progress-fill" class="progress-bar-fill" style="width:0%;"></div>
+                        </div>
+                        <div id="full-scan-stats" style="display:flex;gap:1.25rem;flex-wrap:wrap;margin-top:0.75rem;font-size:0.85rem;color:var(--text-secondary);"></div>
+                    </div>
+                </div>
+
+                <h3 style="margin:1.5rem 0 0.75rem;">Forum Movies</h3>
+                <p style="color:var(--text-secondary);font-size:0.9rem;margin-bottom:0.75rem;">
+                    Movies found by the full forum scanner. Entries marked
+                    <span style="color:var(--danger-color);font-weight:600;">Download Failed</span>
+                    or needing torrent selection can be handled from here.
+                </p>
+                <div id="forum-movies-list" class="movies-grid"></div>
             </div>
 
             <!-- Settings Page -->

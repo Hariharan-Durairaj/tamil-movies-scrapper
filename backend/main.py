@@ -323,12 +323,17 @@ def download_movie(data: MovieDownload, token: str):
                 'is_downloaded':       True,
                 'downloaded_quality':  torrent['quality'],
                 'file_size':           torrent['file_size'],
+                'torrent_url':         torrent['torrent_url'],
+                'torrent_name':        torrent['name'],
                 'added_to_qbittorrent': True,
                 'rejection_reason':    None,   # clear any "manual download" flag
+                'download_failed':     False,
             })
             radarr_success = processor.add_to_radarr(movie['title'], movie['year'])
             if radarr_success:
                 db.update_movie(data.movie_id, {'added_to_radarr': True})
+        else:
+            db.update_movie(data.movie_id, {'download_failed': True})
 
         return {"success": success}
 
@@ -374,6 +379,53 @@ def scan_forum(data: ForumScan, background_tasks: BackgroundTasks, token: str):
     return {"message": "Forum scan started in background"}
 
 # ---------------------------------------------------------------------------
+# Full Forum Scanner — scans every page of the forum (page 1 → last page)
+# ---------------------------------------------------------------------------
+FULL_SCAN_STATE: Dict = {'running': False}
+
+@app.post("/api/movies/full-scan")
+def start_full_scan(background_tasks: BackgroundTasks, token: str):
+    verify_token(token)
+    if FULL_SCAN_STATE.get('running'):
+        raise HTTPException(status_code=409, detail="A full forum scan is already running")
+
+    FULL_SCAN_STATE.clear()
+    FULL_SCAN_STATE.update({
+        'running':    True,
+        'cancel':     False,
+        'started_at': datetime.now().isoformat(),
+        'total_pages': 0,
+        'current_page': 0,
+    })
+
+    def run_full_scan():
+        try:
+            processor.full_forum_scan(FULL_SCAN_STATE)
+        except Exception as e:
+            FULL_SCAN_STATE['error'] = str(e)
+            db.add_log('ERROR', f'Full forum scan background task crashed: {e}', exc_info=e)
+        finally:
+            FULL_SCAN_STATE['running'] = False
+            FULL_SCAN_STATE['finished_at'] = datetime.now().isoformat()
+
+    background_tasks.add_task(run_full_scan)
+    return {"message": "Full forum scan started in background"}
+
+@app.get("/api/movies/full-scan/status")
+def full_scan_status(token: str):
+    verify_token(token)
+    return dict(FULL_SCAN_STATE)
+
+@app.post("/api/movies/full-scan/cancel")
+def cancel_full_scan(token: str):
+    verify_token(token)
+    if not FULL_SCAN_STATE.get('running'):
+        return {"success": False, "message": "No scan is running"}
+    FULL_SCAN_STATE['cancel'] = True
+    db.add_log('INFO', 'Full forum scan cancellation requested')
+    return {"success": True, "message": "Cancellation requested — scan will stop shortly"}
+
+# ---------------------------------------------------------------------------
 # Movie management
 # ---------------------------------------------------------------------------
 @app.get("/api/movies")
@@ -386,6 +438,8 @@ def get_movies(token: str, filter: Optional[str] = None):
         filters['is_downloaded'] = 0
     elif filter == 'rejected':
         filters['rejection_reason'] = True
+    elif filter == 'forum_scan':
+        filters['source'] = 'full_scan'
 
     movies = db.get_all_movies(filters)
     for movie in movies:

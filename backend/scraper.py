@@ -169,6 +169,44 @@ class WebScraper:
             print(f"[SCRAPER] Error extracting forum links: {e}")
             return []
     
+    def get_total_pages(self, url: str) -> int:
+        """
+        Detect the total number of pages of an IPS forum.
+        The pagination element is <ul class="ipsPagination" data-pages="97"
+        data-ipsPagination-pages="97">. Reads data-pages directly.
+        Returns 1 if the element is absent (single-page forum) or on error.
+        """
+        try:
+            print(f"[SCRAPER] Detecting total pages: {url}")
+            response = requests.get(url, headers=self.headers, timeout=15)
+            response.raise_for_status()
+
+            soup = BeautifulSoup(response.content, 'html.parser')
+            pagination = soup.find('ul', class_='ipsPagination')
+            if pagination:
+                # BeautifulSoup lowercases attribute names, so
+                # data-ipsPagination-pages becomes data-ipspagination-pages
+                for attr in ('data-pages', 'data-ipspagination-pages'):
+                    val = pagination.get(attr)
+                    if val and str(val).strip().isdigit():
+                        total = int(str(val).strip())
+                        print(f"[SCRAPER] Total pages detected: {total}")
+                        return total
+
+                # Redundant fallback: page-jump input max attribute
+                page_input = pagination.find('input', attrs={'max': True})
+                if page_input and str(page_input.get('max', '')).strip().isdigit():
+                    total = int(str(page_input['max']).strip())
+                    print(f"[SCRAPER] Total pages from input max: {total}")
+                    return total
+
+            print("[SCRAPER] No pagination found — assuming 1 page")
+            return 1
+
+        except Exception as e:
+            print(f"[SCRAPER] Error detecting total pages: {e}")
+            return 1
+
     def download_torrent(self, torrent_url: str, filename: str = None) -> Optional[str]:
         """
         Download a torrent file
@@ -215,8 +253,27 @@ class WebScraper:
         info = {
             'quality': None,
             'codec': None,
-            'file_size': None
+            'file_size': None,
+            'rip_type': None
         }
+
+        # Extract rip type (source of the rip) — order matters: most
+        # specific / highest-quality patterns first.
+        rip_patterns = [
+            (r'\bBlu[- ]?Ray\b|\bBDRip\b|\bBRRip\b',          'BluRay'),
+            (r'\b(?:TRUE\s+)?WEB[- ]?DL\b',                   'WEB-DL'),
+            (r'\bWEB[- ]?Rip\b',                              'WEBRip'),
+            (r'\bHQ[- ]?(?:HD)?Rip\b|\bHD[- ]?Rip\b',         'HDRip'),
+            (r'\bDVD[- ]?Rip\b',                              'DVDRip'),
+            (r'\bHDTV[- ]?Rip\b|\bHDTV\b',                    'HDTV'),
+            (r'\bHD[- ]?TC\b|\bHDTC\b',                       'HDTC'),
+            (r'\bPre[- ]?DVD\b|\bDVD[- ]?Scr\b',              'PreDVD'),
+            (r'\bCAM\b|\bHQ[- ]?CAM\b|\bTS\b',                'CAM/TS'),
+        ]
+        for pattern, label in rip_patterns:
+            if re.search(pattern, name, re.IGNORECASE):
+                info['rip_type'] = label
+                break
         
         # Extract quality (4K, 2160p, 1080p, 720p, etc.)
         quality_patterns = [

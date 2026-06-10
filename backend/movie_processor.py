@@ -175,11 +175,33 @@ class MovieProcessor:
         poster  = None
         omdb_fallback = None   # keep OMDB result in case TMDB finds nothing better
 
+        def _is_indian_lang_omdb(data) -> bool:
+            lang = (data.get('language') or '').lower() if data else ''
+            return any(l in lang for l in self.PREFERRED_LANG_NAMES)
+
         # --- OMDB ---
         if self.omdb:
             try:
                 self.db.add_log('DEBUG', f'Querying OMDB for: {title} ({year})')
                 omdb_data = self.omdb.get_movie_info(title, year)
+
+                # The forum year may be wrong: if the year-search found
+                # nothing, or found a non-Indian-language film, retry
+                # WITHOUT the year and prefer an Indian-language match.
+                if year and (omdb_data is None or not _is_indian_lang_omdb(omdb_data)):
+                    self.db.add_log('DEBUG',
+                                    f'OMDB year-search for "{title}" ({year}) found no '
+                                    f'Indian-language match — retrying without year')
+                    retry_data = self.omdb.get_movie_info(title)
+                    if retry_data and _is_indian_lang_omdb(retry_data):
+                        self.db.add_log('INFO',
+                                        f'OMDB: forum year {year} appears wrong for "{title}" — '
+                                        f'matched Indian-language film without year',
+                                        {'imdb_id': retry_data.get('imdb_id')})
+                        omdb_data = retry_data
+                    elif omdb_data is None:
+                        omdb_data = retry_data
+
                 if omdb_data:
                     imdb_id    = omdb_data.get('imdb_id')
                     rating_str = omdb_data.get('imdb_rating')
@@ -218,9 +240,27 @@ class MovieProcessor:
             try:
                 self.db.add_log('DEBUG', f'Querying TMDB for: {title} ({year})')
                 tmdb_data = self.tmdb.search_movie(title, year)
-                if not tmdb_data and year:
-                    # Year might be wrong in forum post — try without
-                    tmdb_data = self.tmdb.search_movie(title)
+
+                def _is_indian_lang_tmdb(data) -> bool:
+                    return bool(data) and \
+                        (data.get('original_language') or '').lower() in self.PREFERRED_LANGUAGES
+
+                # Year might be wrong in the forum post: if the year-search
+                # found nothing, or found a non-Indian-language film, retry
+                # without the year and prefer an Indian-language match.
+                if year and (not tmdb_data or not _is_indian_lang_tmdb(tmdb_data)):
+                    self.db.add_log('DEBUG',
+                                    f'TMDB year-search for "{title}" ({year}) found no '
+                                    f'Indian-language match — retrying without year')
+                    retry_data = self.tmdb.search_movie(title)
+                    if retry_data and _is_indian_lang_tmdb(retry_data):
+                        self.db.add_log('INFO',
+                                        f'TMDB: forum year {year} appears wrong for "{title}" — '
+                                        f'matched Indian-language film without year',
+                                        {'tmdb_id': retry_data.get('tmdb_id')})
+                        tmdb_data = retry_data
+                    elif not tmdb_data:
+                        tmdb_data = retry_data
 
                 if tmdb_data:
                     orig_lang = (tmdb_data.get('original_language') or '').lower()
@@ -440,11 +480,27 @@ class MovieProcessor:
                 'torrent_name':         torrent.get('name'),
                 'added_to_qbittorrent': True,
                 'rejection_reason':     None,
+                'download_failed':      False,
             })
+        else:
+            self.db.update_movie(movie_id, {'download_failed': True})
         return {
             'success': success,
             'message': 'Torrent sent to qBittorrent' if success else 'qBittorrent rejected torrent'
         }
+
+    # ------------------------------------------------------------------
+    # Rip-type quality ranking (best → worst)
+    # ------------------------------------------------------------------
+    RIP_RANK = {
+        'BluRay': 1, 'WEB-DL': 2, 'WEBRip': 3, 'HDRip': 4, 'HDTV': 5,
+        'DVDRip': 6, 'HDTC': 7, 'PreDVD': 8, 'CAM/TS': 9,
+    }
+
+    def rank_torrents(self, torrents: List[Dict]) -> List[Dict]:
+        """Sort torrents best-first by rip type (unknown rip types last)."""
+        return sorted(torrents,
+                      key=lambda t: self.RIP_RANK.get(t.get('rip_type'), 99))
 
     # ------------------------------------------------------------------
     # Quality selection
@@ -730,6 +786,16 @@ class MovieProcessor:
             # ── Step 3: fetch torrents EARLY so all paths can store them
             torrents = self._safe_get_torrents(forum_url, title)
 
+            # ── Step 3b: no torrents at all → do NOT save anything ──────
+            # (Bug fix: posts without torrent files were still being added
+            # to the database. If there are no torrents, nothing is saved.)
+            if not torrents:
+                result['message'] = (f'No torrent files found at forum page for '
+                                     f'"{title}" — movie not saved.')
+                self.db.add_log('WARNING', result['message'], {'forum_url': forum_url,
+                                                               'source': source})
+                return result
+
             # ── Step 4: rating threshold check ─────────────────────────
             threshold = float(self.db.get_setting('rating_threshold', '6.5'))
 
@@ -802,11 +868,82 @@ class MovieProcessor:
                 return result
 
             # ── Step 5: quality selection ───────────────────────────────
-            if not torrents:
-                result['message'] = f'No torrents found at forum page for "{title}"'
-                return result
+            if source == 'full_scan':
+                # Full Forum Scanner: download 1080p torrents ONLY.
+                # Dedupe identical torrent URLs; if multiple distinct 1080p
+                # torrents remain (different rip types), save the movie and
+                # ask the user which one to send to qBittorrent.
+                torrents_1080 = []
+                seen_urls = set()
+                for t in torrents:
+                    if (t.get('quality') or '').lower() != '1080p':
+                        continue
+                    u = t.get('torrent_url')
+                    if u in seen_urls:
+                        continue
+                    seen_urls.add(u)
+                    torrents_1080.append(t)
 
-            selected_torrent, alternatives = self.select_quality(torrents)
+                if not torrents_1080:
+                    movie_data = {
+                        'title':            title,
+                        'year':             year,
+                        'imdb_id':          imdb_id,
+                        'imdb_rating':      rating,
+                        'poster_url':       poster,
+                        'forum_url':        forum_url,
+                        'source':           source,
+                        'added_to_radarr':  in_radarr,
+                        'rejection_reason': 'No 1080p torrent available — select manually',
+                        'torrent_url':      torrents[0].get('torrent_url'),
+                        'torrent_name':     torrents[0].get('name'),
+                    }
+                    movie_id = self.db.add_movie(movie_data)
+                    result['movie_id'] = movie_id
+                    for t in torrents:
+                        self.db.add_movie_quality(movie_id, t)
+                    result['needs_user_action'] = True
+                    result['action_type']       = 'select_quality'
+                    result['message'] = f'No 1080p torrent available for "{title}".'
+                    return result
+
+                if len(torrents_1080) > 1:
+                    ranked = self.rank_torrents(torrents_1080)
+                    rip_types = [t.get('rip_type') or '?' for t in ranked]
+                    movie_data = {
+                        'title':            title,
+                        'year':             year,
+                        'imdb_id':          imdb_id,
+                        'imdb_rating':      rating,
+                        'poster_url':       poster,
+                        'forum_url':        forum_url,
+                        'source':           source,
+                        'added_to_radarr':  in_radarr,
+                        'rejection_reason': (f'Multiple 1080p torrents available '
+                                             f'({", ".join(rip_types)}) — choose which '
+                                             f'to send to qBittorrent'),
+                        'torrent_url':      ranked[0].get('torrent_url'),
+                        'torrent_name':     ranked[0].get('name'),
+                    }
+                    movie_id = self.db.add_movie(movie_data)
+                    result['movie_id'] = movie_id
+                    # Store ALL torrents so the details view can show the
+                    # rip-type differences between the duplicate links.
+                    for t in torrents:
+                        self.db.add_movie_quality(movie_id, t)
+                    result['needs_user_action'] = True
+                    result['action_type']       = 'choose_torrent'
+                    result['options']           = ranked
+                    result['message'] = (f'{len(torrents_1080)} different 1080p torrents '
+                                         f'found for "{title}" — selection required.')
+                    self.db.add_log('INFO', result['message'],
+                                    {'rip_types': rip_types, 'forum_url': forum_url})
+                    return result
+
+                selected_torrent = torrents_1080[0]
+                alternatives = [t for t in torrents if t is not selected_torrent]
+            else:
+                selected_torrent, alternatives = self.select_quality(torrents)
 
             if not selected_torrent:
                 movie_data = {
@@ -858,7 +995,10 @@ class MovieProcessor:
                 'torrent_name':         selected_torrent.get('name'),
                 'added_to_qbittorrent': download_success,
                 'added_to_radarr':      radarr_success,
+                'download_failed':      not download_success,
             }
+            if not download_success:
+                movie_data['rejection_reason'] = 'Torrent download failed — retry manually'
             movie_id = self.db.add_movie(movie_data)
             result['movie_id'] = movie_id
             for t in alternatives:
@@ -970,6 +1110,99 @@ class MovieProcessor:
             self.db.add_log('ERROR',
                             f'Forum scan aborted due to unexpected error: {e}', exc_info=e)
             return results
+
+    # ------------------------------------------------------------------
+    # Full Forum Scanner — scans EVERY page of the forum
+    # ------------------------------------------------------------------
+    def full_forum_scan(self, state: Dict) -> None:
+        """
+        Scan the entire forum from page 1 to the last page.
+        Total page count is read from the ipsPagination element so the
+        progress bar has a known denominator from the start.
+        Progress is reported through the shared `state` dict, which the
+        /api/movies/full-scan/status endpoint exposes to the frontend.
+        Duplicates are skipped (never stop the scan). Movies are processed
+        with source='full_scan' → 1080p-only download workflow.
+        """
+        forum_url_template = self.db.get_setting('forum_url')
+
+        total_pages = self.scraper.get_total_pages(forum_url_template)
+        state.update({
+            'total_pages':      total_pages,
+            'current_page':     0,
+            'movies_found':     0,
+            'movies_processed': 0,
+            'movies_failed':    0,
+            'needs_action':     0,
+            'skipped_existing': 0,
+        })
+        self.db.add_log('INFO', f'Full forum scan started — {total_pages} pages detected',
+                        {'forum_url': forum_url_template})
+
+        try:
+            for page in range(1, total_pages + 1):
+                if state.get('cancel'):
+                    self.db.add_log('INFO', f'Full forum scan cancelled at page {page}')
+                    break
+
+                state['current_page'] = page
+                forum_url = (forum_url_template if page == 1
+                             else forum_url_template.rstrip('/') + f'/page/{page}/')
+
+                try:
+                    forum_links = self.scraper.extract_links_with_ipshover(forum_url)
+                except Exception as e:
+                    self.db.add_log('ERROR',
+                                    f'Full scan: failed to fetch page {page}: {e}',
+                                    {'url': forum_url}, exc_info=e)
+                    continue
+
+                for link in forum_links:
+                    if state.get('cancel'):
+                        break
+
+                    parsed = self.scraper.parse_movie_title_year(link['text'])
+                    title  = parsed['title']
+                    year   = parsed['year']
+
+                    if not title:
+                        continue
+
+                    if self.db.movie_exists(title, year):
+                        state['skipped_existing'] += 1
+                        continue
+
+                    state['movies_found'] += 1
+                    try:
+                        r = self.process_movie(title, year, link['href'],
+                                               source='full_scan')
+                        if r.get('success'):
+                            state['movies_processed'] += 1
+                        elif r.get('needs_user_action'):
+                            state['needs_action'] += 1
+                        else:
+                            state['movies_failed'] += 1
+                    except Exception as e:
+                        state['movies_failed'] += 1
+                        self.db.add_log('ERROR',
+                                        f'Full scan: process_movie crashed for '
+                                        f'"{title}" ({year}): {e}',
+                                        {'href': link['href']}, exc_info=e)
+
+            self.db.add_log('INFO', 'Full forum scan complete', {
+                'pages_scanned':    state['current_page'],
+                'total_pages':      total_pages,
+                'movies_found':     state['movies_found'],
+                'movies_processed': state['movies_processed'],
+                'needs_action':     state['needs_action'],
+                'movies_failed':    state['movies_failed'],
+                'skipped_existing': state['skipped_existing'],
+            })
+        except Exception as e:
+            state['error'] = str(e)
+            self.db.add_log('ERROR', f'Full forum scan aborted: {e}', exc_info=e)
+        finally:
+            state['running'] = False
 
     # ------------------------------------------------------------------
     # Radarr Tamil sync

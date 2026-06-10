@@ -143,6 +143,10 @@ document.querySelectorAll('.nav-link').forEach(link => {
         if (page !== 'logs') {
             stopLogStream();
         }
+        // Stop full-scan polling when leaving the scanner page
+        if (page !== 'fullscan') {
+            stopFullScanPolling();
+        }
         
         // Update active nav link
         document.querySelectorAll('.nav-link').forEach(l => l.classList.remove('active'));
@@ -155,6 +159,7 @@ document.querySelectorAll('.nav-link').forEach(link => {
         // Load page data
         if (page === 'dashboard') loadDashboard();
         else if (page === 'movies') loadMovies();
+        else if (page === 'fullscan') loadFullScanPage();
         else if (page === 'settings') { loadSettings(); loadSchedulerStatus(); }
         else if (page === 'logs') loadLogs();
     });
@@ -446,8 +451,8 @@ async function loadMovies() {
     }
 }
 
-function displayMovies(movies) {
-    const container = document.getElementById('movies-list');
+function displayMovies(movies, containerId = 'movies-list') {
+    const container = document.getElementById(containerId);
     container.innerHTML = '';
 
     if (movies.length === 0) {
@@ -479,6 +484,22 @@ function displayMovies(movies) {
             ? `<button class="btn-primary btn-download" data-id="${movie.id}">Download</button>`
             : '';
 
+        // Failed torrent download — shown prominently next to the entry
+        const failedBadge = movie.download_failed
+            ? `<span class="status-badge failed" title="The torrent download failed">⚠ Download Failed</span>`
+            : '';
+
+        // Multiple torrent options pending a choice (full scanner)
+        const needsChoice = !movie.is_downloaded &&
+            movie.available_qualities && movie.available_qualities.length > 1;
+        const chooseBadge = needsChoice && movie.rejection_reason &&
+            movie.rejection_reason.includes('Multiple 1080p')
+            ? `<span class="status-badge choose" title="${escapeHtml(movie.rejection_reason)}">⇄ Choose Torrent</span>`
+            : '';
+        const chooseBtn = needsChoice
+            ? `<button class="btn-secondary btn-choose-torrent" data-id="${movie.id}">⇄ Choose Torrent</button>`
+            : '';
+
         card.innerHTML = `
             <div class="movie-poster-wrapper">
                 ${posterHtml}
@@ -491,12 +512,15 @@ function displayMovies(movies) {
                 </div>
                 <div class="movie-status">
                     ${movie.is_downloaded ? '<span class="status-badge downloaded">Downloaded</span>' : ''}
-                    ${movie.rejection_reason ? '<span class="status-badge rejected">Rejected</span>' : ''}
+                    ${failedBadge}
+                    ${chooseBadge}
+                    ${movie.rejection_reason && !movie.download_failed && !chooseBadge ? '<span class="status-badge rejected">Rejected</span>' : ''}
                     ${movie.downloaded_quality ? `<span class="status-badge">${movie.downloaded_quality}</span>` : ''}
                     ${radarrBadge}
                 </div>
                 <div class="movie-actions">
                     ${downloadBtn}
+                    ${chooseBtn}
                     <button class="btn-secondary btn-details" data-id="${movie.id}">Details</button>
                     <button class="btn-icon btn-refresh-imdb" data-id="${movie.id}" title="Refresh IMDB rating & poster">&#x21BB; IMDB</button>
                     <button class="btn-icon btn-redownload" data-id="${movie.id}" title="Re-search forum and re-download torrent">&#x2B07; Torrent</button>
@@ -516,19 +540,27 @@ function displayMovies(movies) {
     });
 
     // ── Download ─────────────────────────────────────────────────────
-    document.querySelectorAll('.btn-download').forEach(btn => {
+    container.querySelectorAll('.btn-download').forEach(btn => {
         btn.addEventListener('click', e => downloadMovie(e.target.dataset.id));
     });
 
+    // ── Choose torrent (multiple options — quality ranked) ───────────
+    container.querySelectorAll('.btn-choose-torrent').forEach(btn => {
+        btn.addEventListener('click', e => {
+            const movie = movies.find(m => String(m.id) === String(e.target.dataset.id));
+            if (movie) showChooseTorrentModal(movie, containerId);
+        });
+    });
+
     // ── Details ──────────────────────────────────────────────────────
-    document.querySelectorAll('.btn-details').forEach(btn => {
+    container.querySelectorAll('.btn-details').forEach(btn => {
         btn.addEventListener('click', async e => {
             await showMovieDetails(e.target.dataset.id);
         });
     });
 
     // ── Refresh IMDB ─────────────────────────────────────────────────
-    document.querySelectorAll('.btn-refresh-imdb').forEach(btn => {
+    container.querySelectorAll('.btn-refresh-imdb').forEach(btn => {
         btn.addEventListener('click', async e => {
             const b = e.target;
             const movieId = b.dataset.id;
@@ -548,7 +580,7 @@ function displayMovies(movies) {
     });
 
     // ── Re-download torrent ───────────────────────────────────────────
-    document.querySelectorAll('.btn-redownload').forEach(btn => {
+    container.querySelectorAll('.btn-redownload').forEach(btn => {
         btn.addEventListener('click', async e => {
             const b = e.target;
             const movieId = b.dataset.id;
@@ -568,7 +600,7 @@ function displayMovies(movies) {
     });
 
     // ── Edit / manual update ─────────────────────────────────────────
-    document.querySelectorAll('.btn-edit').forEach(btn => {
+    container.querySelectorAll('.btn-edit').forEach(btn => {
         btn.addEventListener('click', e => {
             const b = e.target;
             showEditMovieModal(b.dataset.id, b.dataset.title,
@@ -577,7 +609,7 @@ function displayMovies(movies) {
     });
 
     // ── Add to Radarr ────────────────────────────────────────────────
-    document.querySelectorAll('.btn-add-radarr').forEach(btn => {
+    container.querySelectorAll('.btn-add-radarr').forEach(btn => {
         btn.addEventListener('click', async e => {
             const b = e.target;
             const movieId = b.dataset.id;
@@ -597,7 +629,7 @@ function displayMovies(movies) {
     });
 
     // ── Delete ───────────────────────────────────────────────────────
-    document.querySelectorAll('.btn-delete').forEach(btn => {
+    container.querySelectorAll('.btn-delete').forEach(btn => {
         btn.addEventListener('click', async e => {
             if (confirm('Are you sure you want to delete this movie?')) {
                 await deleteMovie(e.target.dataset.id);
@@ -776,11 +808,31 @@ async function showMovieDetails(movieId) {
         }
 
         if (movie.available_qualities && movie.available_qualities.length > 0) {
-            content += '<h4 style="margin:1rem 0 0.5rem;">Available Qualities:</h4><ul style="padding-left:1.5rem;">';
+            // Count how many torrents exist per quality so duplicates
+            // (same resolution, different rip type) are clearly flagged.
+            const qualityCounts = {};
             movie.available_qualities.forEach(q => {
-                content += `<li>${q.quality || '?'} ${q.codec || ''} — ${q.file_size || 'N/A'}</li>`;
+                const key = (q.quality || '?').toLowerCase();
+                qualityCounts[key] = (qualityCounts[key] || 0) + 1;
+            });
+
+            content += '<h4 style="margin:1rem 0 0.5rem;">Available Torrents:</h4><ul style="padding-left:1.5rem;">';
+            movie.available_qualities.forEach(q => {
+                const key = (q.quality || '?').toLowerCase();
+                const dup = qualityCounts[key] > 1;
+                content += `<li>
+                    <strong>${q.quality || '?'}</strong>
+                    ${q.rip_type ? `<span style="color:var(--primary-color);">[${q.rip_type}]</span>` : ''}
+                    ${q.codec || ''} — ${q.file_size || 'N/A'}
+                    ${dup ? '<span style="color:var(--warning-color);font-size:0.8rem;"> (duplicate quality — differs by rip type)</span>' : ''}
+                </li>`;
             });
             content += '</ul>';
+
+            if (!movie.is_downloaded && movie.available_qualities.length > 1) {
+                content += `<button class="btn-primary" style="margin-top:0.5rem;"
+                    onclick="closeModal(); showChooseTorrentModal(${movie.id})">⇄ Choose Torrent to Download</button>`;
+            }
         }
 
         content += '<div style="margin-top:1.5rem;"><button class="btn-secondary" onclick="closeModal()">Close</button></div>';
@@ -1484,3 +1536,230 @@ document.getElementById('btn-reload-scheduler').addEventListener('click', async 
 document.getElementById('btn-refresh-scheduler-status').addEventListener('click', async () => {
     await loadSchedulerStatus();
 });
+
+// ═══════════════════════════════════════════════════════════════════════
+// Full Forum Scanner
+// ═══════════════════════════════════════════════════════════════════════
+let _fullScanPollTimer = null;
+
+// Rip-type ranking (best → worst) used to order torrent choices
+const RIP_RANK = {
+    'BluRay': 1, 'WEB-DL': 2, 'WEBRip': 3, 'HDRip': 4, 'HDTV': 5,
+    'DVDRip': 6, 'HDTC': 7, 'PreDVD': 8, 'CAM/TS': 9
+};
+
+function rankQualities(qualities) {
+    return [...qualities].sort((a, b) =>
+        (RIP_RANK[a.rip_type] || 99) - (RIP_RANK[b.rip_type] || 99));
+}
+
+async function loadFullScanPage() {
+    await refreshFullScanStatus();
+    await loadForumMovies();
+    startFullScanPolling();
+}
+
+async function loadForumMovies() {
+    try {
+        const response = await apiCall('/api/movies?filter=forum_scan');
+        const data = await response.json();
+        displayMovies(data.movies, 'forum-movies-list');
+    } catch (error) {
+        console.error('Error loading forum movies:', error);
+    }
+}
+
+function startFullScanPolling() {
+    if (_fullScanPollTimer) return;
+    _fullScanPollTimer = setInterval(refreshFullScanStatus, 2000);
+}
+
+function stopFullScanPolling() {
+    if (_fullScanPollTimer) {
+        clearInterval(_fullScanPollTimer);
+        _fullScanPollTimer = null;
+    }
+}
+
+let _fullScanWasRunning = false;
+
+async function refreshFullScanStatus() {
+    try {
+        const response = await apiCall('/api/movies/full-scan/status');
+        if (!response.ok) return;
+        const s = await response.json();
+
+        const startBtn   = document.getElementById('btn-start-full-scan');
+        const cancelBtn  = document.getElementById('btn-cancel-full-scan');
+        const statusText = document.getElementById('full-scan-status-text');
+        const wrap       = document.getElementById('full-scan-progress-wrap');
+        const label      = document.getElementById('full-scan-progress-label');
+        const pct        = document.getElementById('full-scan-progress-pct');
+        const fill       = document.getElementById('full-scan-progress-fill');
+        const stats      = document.getElementById('full-scan-stats');
+
+        const running = !!s.running;
+        startBtn.disabled = running;
+        startBtn.textContent = running ? '⏳ Scanning…' : '▶ Start Full Scan';
+        cancelBtn.style.display = running ? 'inline-block' : 'none';
+
+        if (s.total_pages > 0 || running) {
+            wrap.style.display = 'block';
+            const total   = s.total_pages || 0;
+            const current = s.current_page || 0;
+            const percent = total > 0 ? Math.round((current / total) * 100) : 0;
+            label.textContent = `Page ${current} of ${total}`;
+            pct.textContent = `${percent}%`;
+            fill.style.width = `${percent}%`;
+
+            stats.innerHTML = `
+                <span>🆕 New movies found: <strong>${s.movies_found ?? 0}</strong></span>
+                <span>✅ Processed: <strong>${s.movies_processed ?? 0}</strong></span>
+                <span>⇄ Needs action: <strong>${s.needs_action ?? 0}</strong></span>
+                <span>⚠ Failed: <strong>${s.movies_failed ?? 0}</strong></span>
+                <span>⏭ Already in DB: <strong>${s.skipped_existing ?? 0}</strong></span>
+            `;
+        }
+
+        if (running) {
+            statusText.textContent = s.cancel ? 'Cancelling…' : 'Scan in progress…';
+        } else if (s.error) {
+            statusText.textContent = `Scan stopped with error: ${s.error}`;
+        } else if (s.finished_at) {
+            statusText.textContent = `Last scan finished: ${new Date(s.finished_at).toLocaleString()}`;
+        } else {
+            statusText.textContent = '';
+        }
+
+        // When a scan finishes while we're watching, refresh the movie grid
+        if (_fullScanWasRunning && !running) {
+            await loadForumMovies();
+        }
+        _fullScanWasRunning = running;
+    } catch (error) {
+        console.error('full-scan status error:', error);
+    }
+}
+
+document.getElementById('btn-start-full-scan').addEventListener('click', async () => {
+    if (!confirm('Scan the ENTIRE forum from page 1 to the last page? This can take a long time.')) return;
+    try {
+        const response = await apiCall('/api/movies/full-scan', { method: 'POST' });
+        const data = await response.json();
+        if (response.ok) {
+            showToast(data.message, 'success');
+            _fullScanWasRunning = true;
+            await refreshFullScanStatus();
+            startFullScanPolling();
+        } else {
+            showToast(data.detail || 'Could not start full scan', 'error');
+        }
+    } catch (error) {
+        showToast('Error starting full scan', 'error');
+        console.error(error);
+    }
+});
+
+document.getElementById('btn-cancel-full-scan').addEventListener('click', async () => {
+    try {
+        const response = await apiCall('/api/movies/full-scan/cancel', { method: 'POST' });
+        const data = await response.json();
+        showToast(data.message, data.success ? 'success' : 'warning');
+    } catch (error) {
+        showToast('Error cancelling scan', 'error');
+        console.error(error);
+    }
+});
+
+// ── Choose-torrent modal (quality ranked, rip types shown) ──────────────
+async function showChooseTorrentModal(movieOrId, containerId = null) {
+    let movie = movieOrId;
+    if (typeof movieOrId === 'number' || typeof movieOrId === 'string') {
+        try {
+            const res = await apiCall(`/api/movies/${movieOrId}`);
+            movie = await res.json();
+        } catch (e) {
+            showToast('Could not load movie', 'error');
+            return;
+        }
+    }
+
+    const qualities = rankQualities(movie.available_qualities || []);
+    if (qualities.length === 0) {
+        showToast('No torrent options stored for this movie', 'warning');
+        return;
+    }
+
+    const modal     = document.getElementById('movie-modal');
+    const modalBody = document.getElementById('modal-body');
+
+    let content = `
+        <h3>Choose Torrent — ${escapeHtml(movie.title)} ${movie.year ? `(${movie.year})` : ''}</h3>
+        <p style="color:var(--text-secondary);margin-bottom:1rem;">
+            Multiple torrents are available. They are ranked best-first by rip type
+            (BluRay &gt; WEB-DL &gt; WEBRip &gt; HDRip &gt; …). Pick one to send to qBittorrent.
+        </p>
+    `;
+
+    qualities.forEach((q, idx) => {
+        const recommended = idx === 0;
+        content += `
+            <div class="torrent-option ${recommended ? 'recommended' : ''}">
+                <div>
+                    ${recommended ? '<div class="rec-tag">★ Recommended</div>' : ''}
+                    <div><strong>${q.quality || '?'}</strong>
+                        ${q.rip_type ? `<span style="color:var(--primary-color);">[${q.rip_type}]</span>` : '<span style="color:var(--text-secondary);">[rip type unknown]</span>'}
+                        — ${q.file_size || 'size N/A'}
+                    </div>
+                    <div style="font-size:0.8rem;color:var(--text-secondary);word-break:break-all;">
+                        ${escapeHtml(q.torrent_name || '')}
+                    </div>
+                </div>
+                <button class="btn-primary btn-send-torrent" data-movie-id="${movie.id}" data-quality-id="${q.id}">
+                    Send to qBittorrent
+                </button>
+            </div>
+        `;
+    });
+
+    content += '<button class="btn-secondary" style="margin-top:0.5rem;" onclick="closeModal()">Cancel</button>';
+
+    modalBody.innerHTML = content;
+    modal.classList.remove('hidden');
+    modal.querySelector('.close').onclick = closeModal;
+
+    modal.querySelectorAll('.btn-send-torrent').forEach(btn => {
+        btn.addEventListener('click', async e => {
+            const b = e.target;
+            b.disabled = true;
+            b.textContent = 'Sending…';
+            try {
+                const res = await apiCall('/api/movies/download', {
+                    method: 'POST',
+                    body: JSON.stringify({
+                        movie_id: parseInt(b.dataset.movieId),
+                        quality_id: parseInt(b.dataset.qualityId)
+                    })
+                });
+                const data = await res.json();
+                closeModal();
+                if (data.success) {
+                    showToast('Torrent sent to qBittorrent!', 'success');
+                } else {
+                    showToast('Torrent download failed — movie marked as failed', 'error');
+                }
+                if (containerId === 'forum-movies-list' ||
+                    document.getElementById('page-fullscan').classList.contains('active')) {
+                    await loadForumMovies();
+                } else {
+                    await loadMovies();
+                }
+            } catch (err) {
+                showToast('Error sending torrent', 'error');
+                console.error(err);
+                b.disabled = false;
+                b.textContent = 'Send to qBittorrent';
+            }
+        });
+    });
+}
