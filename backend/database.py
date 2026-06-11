@@ -145,6 +145,9 @@ class Database:
             cur.execute('ALTER TABLE movies ADD COLUMN IF NOT EXISTS download_failed BOOLEAN DEFAULT FALSE')
             # Rip type (WEB-DL / HDRip / etc.) per torrent variant
             cur.execute('ALTER TABLE movie_qualities ADD COLUMN IF NOT EXISTS rip_type TEXT')
+            # Local path of the .torrent file pre-downloaded by the Full Forum
+            # Scanner (library mode) so it can be sent to qBittorrent later.
+            cur.execute('ALTER TABLE movie_qualities ADD COLUMN IF NOT EXISTS torrent_file_path TEXT')
             # Make torrent_name nullable if it was created NOT NULL
             cur.execute('''
                 DO $$
@@ -178,6 +181,8 @@ class Database:
                 'auto_download':        'true',
                 'auto_start_enabled':   'false',
                 'full_domain':          'www.1tamilmv.cymru',
+                # Full Forum Scanner — last page completed (used to resume a scan)
+                'full_scan_last_page':  '0',
             }
             for key, value in defaults.items():
                 cur.execute('''
@@ -352,6 +357,38 @@ class Database:
             cur = conn.cursor()
             cur.execute('DELETE FROM movies WHERE id = %s', (movie_id,))
 
+    def count_movies_by_source(self, source):
+        """Number of movies that came from a given source (e.g. 'full_scan')."""
+        with self.get_connection() as conn:
+            cur = conn.cursor()
+            cur.execute('SELECT COUNT(*) FROM movies WHERE source = %s', (source,))
+            return cur.fetchone()[0]
+
+    def delete_movies_by_source(self, source):
+        """
+        Delete every movie with the given source (movie_qualities rows are
+        removed automatically via ON DELETE CASCADE). Returns the number of
+        movies deleted. Used by the Full Forum Scanner 'Delete All' button so
+        the library can be rebuilt from scratch.
+        """
+        with self.get_connection() as conn:
+            cur = conn.cursor()
+            cur.execute('DELETE FROM movies WHERE source = %s', (source,))
+            return cur.rowcount
+
+    def promote_movie(self, movie_id, new_source='manual'):
+        """
+        Move a forum-library movie into the 'normal' database by changing its
+        source away from 'full_scan' so it no longer shows under the Full
+        Forum Scanner's library view.
+        """
+        with self.get_connection() as conn:
+            cur = conn.cursor()
+            cur.execute(
+                'UPDATE movies SET source = %s, updated_at = NOW() WHERE id = %s',
+                (new_source, movie_id)
+            )
+
     # ------------------------------------------------------------------
     # Movie qualities
     # ------------------------------------------------------------------
@@ -367,8 +404,8 @@ class Database:
         with self.get_connection() as conn:
             cur = conn.cursor()
             cur.execute('''
-                INSERT INTO movie_qualities (movie_id, quality, file_size, torrent_url, torrent_name, rip_type)
-                VALUES (%s, %s, %s, %s, %s, %s)
+                INSERT INTO movie_qualities (movie_id, quality, file_size, torrent_url, torrent_name, rip_type, torrent_file_path)
+                VALUES (%s, %s, %s, %s, %s, %s, %s)
             ''', (
                 movie_id,
                 quality,
@@ -376,6 +413,7 @@ class Database:
                 quality_data.get('torrent_url'),
                 quality_data.get('torrent_name'),
                 quality_data.get('rip_type'),
+                quality_data.get('torrent_file_path'),
             ))
 
     def get_movie_qualities(self, movie_id):

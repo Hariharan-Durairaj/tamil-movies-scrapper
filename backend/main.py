@@ -142,6 +142,10 @@ class ForumScan(BaseModel):
     max_pages: Optional[int] = 3
     max_links: Optional[int] = 50
 
+class FullForumScan(BaseModel):
+    start_page: Optional[int] = 1
+    end_page: Optional[int] = None   # None → scan to the last page
+
 class BulkAdd(BaseModel):
     movie_names: str   # comma-separated list
 
@@ -384,10 +388,14 @@ def scan_forum(data: ForumScan, background_tasks: BackgroundTasks, token: str):
 FULL_SCAN_STATE: Dict = {'running': False}
 
 @app.post("/api/movies/full-scan")
-def start_full_scan(background_tasks: BackgroundTasks, token: str):
+def start_full_scan(background_tasks: BackgroundTasks, token: str,
+                    data: FullForumScan = FullForumScan()):
     verify_token(token)
     if FULL_SCAN_STATE.get('running'):
         raise HTTPException(status_code=409, detail="A full forum scan is already running")
+
+    start_page = max(1, int(data.start_page or 1))
+    end_page   = int(data.end_page) if data.end_page else None
 
     FULL_SCAN_STATE.clear()
     FULL_SCAN_STATE.update({
@@ -396,11 +404,15 @@ def start_full_scan(background_tasks: BackgroundTasks, token: str):
         'started_at': datetime.now().isoformat(),
         'total_pages': 0,
         'current_page': 0,
+        'scan_start_page': start_page,
+        'scan_end_page':   end_page,
     })
 
     def run_full_scan():
         try:
-            processor.full_forum_scan(FULL_SCAN_STATE)
+            processor.full_forum_scan(FULL_SCAN_STATE,
+                                      start_page=start_page,
+                                      end_page=end_page)
         except Exception as e:
             FULL_SCAN_STATE['error'] = str(e)
             db.add_log('ERROR', f'Full forum scan background task crashed: {e}', exc_info=e)
@@ -409,7 +421,24 @@ def start_full_scan(background_tasks: BackgroundTasks, token: str):
             FULL_SCAN_STATE['finished_at'] = datetime.now().isoformat()
 
     background_tasks.add_task(run_full_scan)
-    return {"message": "Full forum scan started in background"}
+    rng = (f"pages {start_page}–{end_page}" if end_page
+           else f"from page {start_page} to the last page")
+    return {"message": f"Full forum scan started in background ({rng})"}
+
+@app.delete("/api/movies/full-scan/all")
+def delete_all_full_scan(token: str):
+    """Delete every movie found by the Full Forum Scanner so the library
+    can be rebuilt from scratch. Resets the resume marker too."""
+    verify_token(token)
+    try:
+        count = db.delete_movies_by_source('full_scan')
+        db.set_setting('full_scan_last_page', '0')
+        db.add_log('INFO', f'Full forum scanner library cleared — {count} movies deleted')
+        return {"success": True, "deleted": count,
+                "message": f"Deleted {count} forum-library movie(s)."}
+    except Exception as e:
+        db.add_log('ERROR', f'Failed to clear full-scan library: {e}', exc_info=e)
+        raise HTTPException(status_code=500, detail=str(e))
 
 @app.get("/api/movies/full-scan/status")
 def full_scan_status(token: str):
@@ -577,11 +606,33 @@ def add_movie_to_radarr(movie_id: int, token: str):
         )
         if success:
             db.update_movie(movie_id, {'added_to_radarr': True})
+            # Adding to Radarr promotes a library movie into the normal DB.
+            if movie.get('source') == 'full_scan':
+                db.promote_movie(movie_id)
+                db.add_log('INFO',
+                           f'"{movie["title"]}" moved to normal DB (added to Radarr)',
+                           {'movie_id': movie_id})
         return {"success": success,
                 "message": "Added to Radarr" if success else "Failed to add to Radarr"}
     except Exception as e:
         db.add_log('ERROR', f'add-to-radarr error for movie {movie_id}: {e}', exc_info=e)
         raise HTTPException(status_code=500, detail=str(e))
+
+# ---------------------------------------------------------------------------
+# Promote a forum-library movie into the normal database
+# ---------------------------------------------------------------------------
+@app.post("/api/movies/{movie_id}/promote")
+def promote_movie_endpoint(movie_id: int, token: str):
+    verify_token(token)
+    movie = db.get_movie_by_id(movie_id)
+    if not movie:
+        raise HTTPException(status_code=404, detail="Movie not found")
+    db.promote_movie(movie_id)
+    db.add_log('INFO',
+               f'Moved "{movie["title"]}" ({movie.get("year")}) from forum library '
+               f'to the normal database',
+               {'movie_id': movie_id})
+    return {"success": True, "message": f'Moved "{movie["title"]}" to your movies.'}
 
 # ---------------------------------------------------------------------------
 # Domain finder — find current 1tamilmv domain via Google

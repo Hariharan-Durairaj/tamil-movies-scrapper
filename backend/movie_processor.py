@@ -1,5 +1,6 @@
 import traceback
 import sys
+import time
 from database import Database
 from scraper import WebScraper
 from api_clients import OMDBClient, TMDBClient, RadarrClient, QBittorrentClient, IMDBScraper
@@ -149,8 +150,18 @@ class MovieProcessor:
     def get_movie_torrents(self, forum_url: str) -> List[Dict]:
         try:
             self.db.add_log('INFO', f'Extracting torrents from: {forum_url}')
-            torrents = self.scraper.extract_torrents_by_fileext(forum_url)
-            self.db.add_log('INFO', f'Found {len(torrents)} torrents at {forum_url}')
+            # Three-tier fallback: data-fileext → magnet → ipsAttachLink.
+            torrents = self.scraper.extract_all_torrents(forum_url)
+            if torrents:
+                fmt = torrents[0].get('source_format', 'unknown')
+                self.db.add_log('INFO',
+                                f'Found {len(torrents)} torrents at {forum_url} '
+                                f'(format: {fmt})',
+                                {'source_format': fmt})
+            else:
+                self.db.add_log('WARNING',
+                                f'No torrents found at {forum_url} in any format '
+                                f'(fileext / magnet / ipsAttachLink)')
             return torrents
         except Exception as e:
             self.db.add_log('ERROR',
@@ -531,6 +542,25 @@ class MovieProcessor:
         try:
             torrent_url  = torrent['torrent_url']
             torrent_name = torrent.get('name') or torrent.get('torrent_name', '')
+
+            # ── Magnet link: hand it straight to qBittorrent (no file) ──────
+            is_magnet = torrent.get('is_magnet') or \
+                (isinstance(torrent_url, str) and torrent_url.startswith('magnet:'))
+            if is_magnet:
+                if not self.qbittorrent:
+                    self.db.add_log('WARNING',
+                                    'qBittorrent not configured — cannot add magnet',
+                                    {'torrent_name': torrent_name})
+                    return False
+                self.db.add_log('INFO', f'Adding magnet to qBittorrent: {movie_title}',
+                                {'torrent_name': torrent_name})
+                if self.qbittorrent.add_torrent_url(torrent_url, category='radarr'):
+                    self.db.add_log('INFO', f'qBittorrent accepted magnet for: {movie_title}')
+                    return True
+                self.db.add_log('ERROR',
+                                f'qBittorrent rejected magnet for "{movie_title}"',
+                                {'qbittorrent_url': self.qbittorrent.url})
+                return False
 
             self.db.add_log('INFO', f'Downloading torrent file for: {movie_title}',
                             {'torrent_url': torrent_url, 'torrent_name': torrent_name})
@@ -1112,35 +1142,179 @@ class MovieProcessor:
             return results
 
     # ------------------------------------------------------------------
-    # Full Forum Scanner — scans EVERY page of the forum
+    # Full Forum Scanner — LIBRARY builder (no auto-download)
     # ------------------------------------------------------------------
-    def full_forum_scan(self, state: Dict) -> None:
+    def catalog_forum_movie(self, title: str, year: Optional[int],
+                            forum_url: str) -> Dict:
         """
-        Scan the entire forum from page 1 to the last page.
-        Total page count is read from the ipsPagination element so the
-        progress bar has a known denominator from the start.
-        Progress is reported through the shared `state` dict, which the
-        /api/movies/full-scan/status endpoint exposes to the frontend.
-        Duplicates are skipped (never stop the scan). Movies are processed
-        with source='full_scan' → 1080p-only download workflow.
+        Record a single forum movie into the LIBRARY.
+
+        Unlike process_movie(), this never sends anything to qBittorrent and
+        never adds the movie to Radarr. For every distinct 1080p torrent link
+        the .torrent file is pre-downloaded to disk so it can be queued later
+        from the library. IMDB/TMDB rating + poster are fetched so the card
+        looks complete.
+
+        Returns: {'status': 'cataloged' | 'skipped' | 'no_torrents' | 'error',
+                  'movie_id': int | None, 'torrent_count': int}
+        """
+        # Resume / dedupe — if it is already in the DB (any source), leave it.
+        if self.db.movie_exists(title, year):
+            return {'status': 'skipped', 'movie_id': None, 'torrent_count': 0}
+
+        # Metadata — best effort, never abort the catalog on a rating failure.
+        try:
+            imdb_id, rating, poster = self.get_movie_rating(title, year)
+        except Exception as e:
+            self.db.add_log('WARNING',
+                            f'Full scan: rating lookup failed for "{title}" ({year}): {e}',
+                            {'forum_url': forum_url})
+            imdb_id = rating = poster = None
+
+        torrents = self._safe_get_torrents(forum_url, title)
+
+        if not torrents:
+            # Still record the movie so the library shows it exists on the
+            # forum, but flag that no torrent files were found.
+            movie_id = self.db.add_movie({
+                'title':                title,
+                'year':                 year,
+                'imdb_id':              imdb_id,
+                'imdb_rating':          rating,
+                'poster_url':           poster,
+                'forum_url':            forum_url,
+                'source':               'full_scan',
+                'is_downloaded':        False,
+                'added_to_radarr':      False,
+                'added_to_qbittorrent': False,
+                'rejection_reason':     'No torrent files found on the forum page',
+            })
+            self.db.add_log('INFO',
+                            f'Full scan: cataloged "{title}" ({year}) — no torrent files',
+                            {'forum_url': forum_url, 'movie_id': movie_id})
+            return {'status': 'no_torrents', 'movie_id': movie_id, 'torrent_count': 0}
+
+        # Keep only 1080p torrents, de-duplicated by URL. Each distinct link
+        # (e.g. different rip types) is kept as its own quality variant.
+        seen_urls = set()
+        torrents_1080 = []
+        for t in torrents:
+            if (t.get('quality') or '').lower() != '1080p':
+                continue
+            u = t.get('torrent_url')
+            if not u or u in seen_urls:
+                continue
+            seen_urls.add(u)
+            torrents_1080.append(t)
+
+        # Store 1080p variants; if there are none, fall back to everything so
+        # the user can still pick a quality from the library card.
+        variants = torrents_1080 if torrents_1080 else torrents
+        note = None
+        if not torrents_1080:
+            note = 'No 1080p torrent on the forum — other qualities available'
+        elif len(torrents_1080) > 1:
+            rips = ', '.join(t.get('rip_type') or '?'
+                             for t in self.rank_torrents(torrents_1080))
+            note = f'{len(torrents_1080)} 1080p torrents available ({rips})'
+
+        # Pre-download each .torrent file (best effort) so it is ready in the
+        # library to be sent to qBittorrent later. Magnet links have no file
+        # to download — they are stored as-is and queued directly when chosen.
+        for t in variants:
+            url = t.get('torrent_url')
+            if t.get('is_magnet') or (isinstance(url, str) and url.startswith('magnet:')):
+                t['torrent_file_path'] = None
+                continue
+            try:
+                path = self.scraper.download_torrent(
+                    url, t.get('name') or t.get('torrent_name'))
+                t['torrent_file_path'] = path
+            except Exception as e:
+                t['torrent_file_path'] = None
+                self.db.add_log('WARNING',
+                                f'Full scan: could not pre-download .torrent for '
+                                f'"{title}": {e}',
+                                {'torrent_url': url})
+
+        primary = self.rank_torrents(variants)[0] if variants else None
+        movie_id = self.db.add_movie({
+            'title':                title,
+            'year':                 year,
+            'imdb_id':              imdb_id,
+            'imdb_rating':          rating,
+            'poster_url':           poster,
+            'forum_url':            forum_url,
+            'source':               'full_scan',
+            'is_downloaded':        False,
+            'added_to_radarr':      False,
+            'added_to_qbittorrent': False,
+            'downloaded_quality':   '1080p' if torrents_1080 else None,
+            'torrent_url':          primary.get('torrent_url') if primary else None,
+            'torrent_name':         primary.get('name') if primary else None,
+            'rejection_reason':     note,
+        })
+        for t in variants:
+            self.db.add_movie_quality(movie_id, t)
+
+        self.db.add_log('INFO',
+                        f'Full scan: cataloged "{title}" ({year}) — '
+                        f'{len(variants)} torrent file(s) stored'
+                        + (f' [{note}]' if note else ''),
+                        {'forum_url': forum_url, 'movie_id': movie_id,
+                         'has_1080p': bool(torrents_1080)})
+        return {'status': 'cataloged', 'movie_id': movie_id,
+                'torrent_count': len(variants)}
+
+    def full_forum_scan(self, state: Dict,
+                        start_page: int = 1,
+                        end_page: Optional[int] = None) -> None:
+        """
+        Build a browsable LIBRARY of every movie in the forum.
+
+        Walks the forum from `start_page` to `end_page` (defaults to the last
+        page) and catalogs each movie WITHOUT downloading it through
+        qBittorrent and WITHOUT adding it to Radarr. Movies already in the
+        database are skipped, so the scan can be safely re-run or resumed
+        without redoing work that the previous scan already did.
+
+        A transparent breakdown of every link seen is reported through the
+        shared `state` dict (exposed by /api/movies/full-scan/status):
+          links_seen        — total <a> links inspected
+          not_a_movie       — links with no (YYYY) → nav/category/user links
+          skipped_existing  — movies already in the library (dedupe/resume)
+          cataloged         — brand-new movies added to the library
+          no_torrents       — cataloged but the forum page had no torrent file
+          pages_failed      — pages that returned 0 links after 3 retries
+          pages_retried     — pages that only succeeded after a retry
         """
         forum_url_template = self.db.get_setting('forum_url')
-
         total_pages = self.scraper.get_total_pages(forum_url_template)
+
+        start_page = max(1, int(start_page or 1))
+        end_page   = int(end_page) if end_page else total_pages
+        end_page   = max(start_page, min(end_page, total_pages))
+
         state.update({
             'total_pages':      total_pages,
-            'current_page':     0,
-            'movies_found':     0,
-            'movies_processed': 0,
-            'movies_failed':    0,
-            'needs_action':     0,
+            'scan_start_page':  start_page,
+            'scan_end_page':    end_page,
+            'current_page':     start_page - 1,
+            'links_seen':       0,
+            'not_a_movie':      0,
+            'cataloged':        0,
             'skipped_existing': 0,
+            'no_torrents':      0,
+            'pages_failed':     0,
+            'pages_retried':    0,
         })
-        self.db.add_log('INFO', f'Full forum scan started — {total_pages} pages detected',
+        self.db.add_log('INFO',
+                        f'Full forum scan (LIBRARY mode) started — pages '
+                        f'{start_page}–{end_page} of {total_pages} total',
                         {'forum_url': forum_url_template})
 
         try:
-            for page in range(1, total_pages + 1):
+            for page in range(start_page, end_page + 1):
                 if state.get('cancel'):
                     self.db.add_log('INFO', f'Full forum scan cancelled at page {page}')
                     break
@@ -1149,54 +1323,108 @@ class MovieProcessor:
                 forum_url = (forum_url_template if page == 1
                              else forum_url_template.rstrip('/') + f'/page/{page}/')
 
-                try:
-                    forum_links = self.scraper.extract_links_with_ipshover(forum_url)
-                except Exception as e:
+                # Fetch links with retries — an empty page is almost always a
+                # transient rate-limit, NOT a genuinely empty page. Retrying
+                # before skipping is what stops real movie pages being missed.
+                forum_links = []
+                for attempt in range(1, 4):
+                    try:
+                        forum_links = self.scraper.extract_links_with_ipshover(forum_url)
+                    except Exception as e:
+                        self.db.add_log('ERROR',
+                                        f'Full scan: error fetching page {page} '
+                                        f'(attempt {attempt}/3): {e}',
+                                        {'url': forum_url}, exc_info=e)
+                        forum_links = []
+                    if forum_links:
+                        if attempt > 1:
+                            state['pages_retried'] += 1
+                            self.db.add_log('INFO',
+                                            f'Full scan: page {page} recovered on '
+                                            f'attempt {attempt} ({len(forum_links)} links)')
+                        break
+                    if attempt < 3:
+                        self.db.add_log('WARNING',
+                                        f'Full scan: page {page} returned 0 links — '
+                                        f'retrying ({attempt}/3) after backoff',
+                                        {'url': forum_url})
+                        time.sleep(2 * attempt)
+
+                if not forum_links:
+                    state['pages_failed'] += 1
                     self.db.add_log('ERROR',
-                                    f'Full scan: failed to fetch page {page}: {e}',
-                                    {'url': forum_url}, exc_info=e)
+                                    f'Full scan: page {page}/{end_page} FAILED — '
+                                    f'0 links after 3 attempts (rate limit or bad URL). '
+                                    f'Page skipped; re-run this page range later to fill '
+                                    f'the gap.',
+                                    {'url': forum_url})
+                    self.db.set_setting('full_scan_last_page', str(page))
+                    time.sleep(1.0)
                     continue
 
+                page_new = page_dupe = 0
                 for link in forum_links:
                     if state.get('cancel'):
                         break
+                    state['links_seen'] += 1
 
                     parsed = self.scraper.parse_movie_title_year(link['text'])
                     title  = parsed['title']
                     year   = parsed['year']
 
-                    if not title:
+                    # A forum movie topic always carries a (YYYY) year. Links
+                    # without one are navigation / category / user / pagination
+                    # links — not movies. This is the main reason a page of N
+                    # links yields far fewer actual movies.
+                    if not title or not year:
+                        state['not_a_movie'] += 1
                         continue
 
                     if self.db.movie_exists(title, year):
                         state['skipped_existing'] += 1
+                        page_dupe += 1
                         continue
 
-                    state['movies_found'] += 1
+                    state['last_movie'] = f'{title} ({year})'
                     try:
-                        r = self.process_movie(title, year, link['href'],
-                                               source='full_scan')
-                        if r.get('success'):
-                            state['movies_processed'] += 1
-                        elif r.get('needs_user_action'):
-                            state['needs_action'] += 1
-                        else:
-                            state['movies_failed'] += 1
+                        r = self.catalog_forum_movie(title, year, link['href'])
+                        st = r.get('status')
+                        if st == 'cataloged':
+                            state['cataloged'] += 1
+                            page_new += 1
+                        elif st == 'no_torrents':
+                            state['no_torrents'] += 1
+                            page_new += 1
+                        elif st == 'skipped':
+                            state['skipped_existing'] += 1
+                            page_dupe += 1
                     except Exception as e:
-                        state['movies_failed'] += 1
                         self.db.add_log('ERROR',
-                                        f'Full scan: process_movie crashed for '
+                                        f'Full scan: cataloging crashed for '
                                         f'"{title}" ({year}): {e}',
                                         {'href': link['href']}, exc_info=e)
 
-            self.db.add_log('INFO', 'Full forum scan complete', {
-                'pages_scanned':    state['current_page'],
-                'total_pages':      total_pages,
-                'movies_found':     state['movies_found'],
-                'movies_processed': state['movies_processed'],
-                'needs_action':     state['needs_action'],
-                'movies_failed':    state['movies_failed'],
-                'skipped_existing': state['skipped_existing'],
+                self.db.add_log('INFO',
+                                f'Full scan: page {page}/{end_page} done — '
+                                f'{len(forum_links)} links, {page_new} new, '
+                                f'{page_dupe} already in library',
+                                {'url': forum_url})
+                # Persist progress so an interrupted scan can be resumed.
+                self.db.set_setting('full_scan_last_page', str(page))
+                # Be polite to the forum — avoids tripping rate limits that
+                # would make pages return no links.
+                time.sleep(0.5)
+
+            self.db.add_log('INFO', 'Full forum scan (LIBRARY) complete', {
+                'pages_scanned':      f"{start_page}-{state['current_page']}",
+                'total_pages':        total_pages,
+                'links_seen':         state['links_seen'],
+                'not_a_movie':        state['not_a_movie'],
+                'newly_cataloged':    state['cataloged'],
+                'no_torrents':        state['no_torrents'],
+                'already_in_library': state['skipped_existing'],
+                'pages_failed':       state['pages_failed'],
+                'pages_retried':      state['pages_retried'],
             })
         except Exception as e:
             state['error'] = str(e)

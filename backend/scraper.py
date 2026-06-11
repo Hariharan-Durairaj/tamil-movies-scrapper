@@ -1,6 +1,6 @@
 import requests
 from bs4 import BeautifulSoup
-from urllib.parse import urljoin, quote
+from urllib.parse import urljoin, quote, unquote, urlparse, parse_qs
 import re
 import os
 from typing import List, Dict, Optional
@@ -47,63 +47,202 @@ class WebScraper:
             print(f"[SCRAPER] Error extracting search links: {e}")
             return []
     
-    def extract_torrents_by_fileext(self, url: str) -> List[Dict]:
-        """
-        Extract torrent files using data-fileext="torrent" attribute
-        Returns list of torrent download links with metadata
-        """
+    def _fetch_soup(self, url: str) -> Optional[BeautifulSoup]:
+        """Fetch a page and return a parsed BeautifulSoup, or None on error."""
         try:
-            print(f"[SCRAPER] Fetching torrents from: {url}")
             response = requests.get(url, headers=self.headers, timeout=10)
             response.raise_for_status()
-            
-            soup = BeautifulSoup(response.content, 'html.parser')
-            torrent_links = soup.find_all('a', attrs={'data-fileext': 'torrent'})
-            
-            print(f"[SCRAPER] Found {len(torrent_links)} torrent files")
-            
-            torrents = []
-            for idx, link in enumerate(torrent_links, 1):
-                href = link.get('href')
-                file_id = link.get('data-fileid')
-                
-                # Get torrent name
-                name = None
-                span = link.find('span')
-                if span:
-                    strong = span.find('strong')
-                    name = strong.get_text(strip=True) if strong else span.get_text(strip=True)
-                
-                if not name:
-                    name = link.get_text(strip=True)
-                
-                # Convert to absolute URL and unescape
-                if href:
-                    if not href.startswith('http'):
-                        href = urljoin(url, href)
-                    href = href.replace('&amp;', '&')
-                
-                if name and href:
-                    # Extract quality and size info from name
-                    quality_info = self.parse_torrent_name(name)
-                    
-                    torrents.append({
-                        'name': name,
-                        'torrent_url': href,
-                        'file_id': file_id,
-                        'type': 'direct_download',
-                        **quality_info
-                    })
-                    
-                    print(f"[SCRAPER] {idx}. {name}")
-                    print(f"[SCRAPER]    Quality: {quality_info.get('quality')}, Size: {quality_info.get('file_size')}")
-            
-            return torrents
-        
+            return BeautifulSoup(response.content, 'html.parser')
         except Exception as e:
-            print(f"[SCRAPER] Error extracting torrents: {e}")
+            print(f"[SCRAPER] Error fetching page {url}: {e}")
+            return None
+
+    def _parse_fileext_torrents(self, soup: BeautifulSoup, base_url: str) -> List[Dict]:
+        """
+        FORMAT 1 (standard, current): <a data-fileext="torrent" data-fileid=...
+        href="...attachment.php?id=...&key=...">name.torrent</a>
+        """
+        torrent_links = soup.find_all('a', attrs={'data-fileext': 'torrent'})
+        print(f"[SCRAPER] Format 1 (data-fileext): {len(torrent_links)} torrent files")
+
+        torrents = []
+        for idx, link in enumerate(torrent_links, 1):
+            href = link.get('href')
+            file_id = link.get('data-fileid')
+
+            name = None
+            span = link.find('span')
+            if span:
+                strong = span.find('strong')
+                name = strong.get_text(strip=True) if strong else span.get_text(strip=True)
+            if not name:
+                name = link.get_text(strip=True)
+
+            if href:
+                if not href.startswith('http'):
+                    href = urljoin(base_url, href)
+                href = href.replace('&amp;', '&')
+
+            if name and href:
+                quality_info = self.parse_torrent_name(name)
+                torrents.append({
+                    'name': name,
+                    'torrent_url': href,
+                    'file_id': file_id,
+                    'type': 'direct_download',
+                    'source_format': 'fileext',
+                    **quality_info
+                })
+                print(f"[SCRAPER] {idx}. {name}")
+                print(f"[SCRAPER]    Quality: {quality_info.get('quality')}, Size: {quality_info.get('file_size')}")
+        return torrents
+
+    def _clean_magnet_name(self, dn: str) -> str:
+        """
+        Clean a magnet `dn` (display name) into a torrent-style name.
+        Removes the leading "www.1TamilMV.<tld> - " site prefix, the trailing
+        container extension, and normalises non-breaking spaces.
+        """
+        name = unquote(dn or '')
+        name = name.replace('\xa0', ' ').replace(' ', ' ')
+        # Strip leading site prefix:  "www.1TamilMV.buzz - "
+        name = re.sub(r'^\s*www\.[^\s]+\s*-\s*', '', name, flags=re.IGNORECASE)
+        # Strip trailing container extension (.mkv / .mp4 / .avi)
+        name = re.sub(r'\.(mkv|mp4|avi)\s*$', '', name, flags=re.IGNORECASE)
+        return name.strip()
+
+    def _parse_magnet_torrents(self, soup: BeautifulSoup, base_url: str) -> List[Dict]:
+        """
+        FORMAT 2 (fallback): magnet links. The torrent file is unavailable but
+        a `magnet:?xt=urn:btih:...&dn=...` link carries the full name (with
+        year, quality, codec, rip type, size) in its `dn` parameter.
+        """
+        magnet_links = soup.select('a[href^="magnet:"]')
+        print(f"[SCRAPER] Format 2 (magnet): {len(magnet_links)} magnet links")
+
+        torrents = []
+        seen = set()
+        for idx, link in enumerate(magnet_links, 1):
+            magnet = (link.get('href') or '').replace('&amp;', '&')
+            if not magnet.startswith('magnet:') or magnet in seen:
+                continue
+            seen.add(magnet)
+
+            params = parse_qs(urlparse(magnet).query)
+            dn   = (params.get('dn') or [''])[0]
+            btih = (params.get('xt') or [''])[0].replace('urn:btih:', '')
+            name = self._clean_magnet_name(dn) or link.get_text(strip=True) or btih
+
+            quality_info = self.parse_torrent_name(name)
+            torrents.append({
+                'name': name,
+                'torrent_url': magnet,      # magnet IS the actionable link
+                'magnet': magnet,
+                'is_magnet': True,
+                'file_id': btih or None,
+                'type': 'magnet',
+                'source_format': 'magnet',
+                **quality_info
+            })
+            print(f"[SCRAPER] {idx}. (magnet) {name}")
+            print(f"[SCRAPER]    Quality: {quality_info.get('quality')}, Size: {quality_info.get('file_size')}")
+        return torrents
+
+    def _descriptive_name_before(self, link) -> Optional[str]:
+        """
+        Older posts put the full title line (e.g. "ASURAGURU (2020) Tamil TRUE
+        WEB-DL - 1080p - AVC - ... - 8.6GB - ESub :") in the text just BEFORE
+        the attachment link, while the link's own text only carries the quality
+        tail. Return the nearest preceding text that contains a (YYYY) year.
+        """
+        node = link.find_previous(string=re.compile(r'\(\d{4}\)'))
+        if node:
+            text = re.sub(r'\s*:\s*$', '', str(node).strip())   # drop trailing colon
+            if re.search(r'\(\d{4}\)', text):
+                return text
+        return None
+
+    def _parse_ipsattachlink_torrents(self, soup: BeautifulSoup, base_url: str) -> List[Dict]:
+        """
+        FORMAT 3 (older posts, fallback): attachment links that have a
+        data-fileid and an attachment.php href but NO data-fileext attribute.
+        These are rendered with class="ipsAttachLink" and the link text is only
+        the quality tail (e.g. "1080p - AVC - UNTOUCHED - 8.6GB.mp4.torrent"),
+        so the descriptive title line before the link is preferred for the name.
+        """
+        candidates = soup.select('a.ipsAttachLink, a[data-fileid]')
+        torrents = []
+        seen = set()
+        for link in candidates:
+            if link.get('data-fileext') == 'torrent':
+                continue  # already handled by Format 1
+            href = link.get('href') or ''
+            if 'attachment.php' not in href and '/file/' not in href:
+                continue
+
+            link_text = link.get('title') or link.get_text(strip=True)
+            # Prefer the descriptive title line (has title/year/rip); the link's
+            # own text is used to fill in any quality detail it may lack.
+            desc = self._descriptive_name_before(link)
+            name = desc or link_text
+            if not name:
+                continue
+            if not href.startswith('http'):
+                href = urljoin(base_url, href)
+            href = href.replace('&amp;', '&')
+            if href in seen:
+                continue
+            seen.add(href)
+
+            # Parse quality from the richest text available (desc + link tail).
+            quality_info = self.parse_torrent_name(f'{name} {link_text}')
+            torrents.append({
+                'name': name,
+                'torrent_url': href,
+                'file_id': link.get('data-fileid'),
+                'type': 'direct_download',
+                'source_format': 'ipsAttachLink',
+                **quality_info
+            })
+        print(f"[SCRAPER] Format 3 (ipsAttachLink): {len(torrents)} torrent files")
+        return torrents
+
+    def extract_all_torrents(self, url: str) -> List[Dict]:
+        """
+        Fetch a forum post ONCE and find its torrents using a three-tier
+        fallback chain (the page may use any of the formats below):
+
+          1. data-fileext="torrent"  — standard / current posts
+          2. magnet links            — name/year/rip parsed from the magnet dn
+          3. ipsAttachLink           — older posts: attachment link, no fileext
+
+        The first tier that yields results wins.
+        """
+        print(f"[SCRAPER] Fetching torrents from: {url}")
+        soup = self._fetch_soup(url)
+        if soup is None:
             return []
-    
+
+        torrents = self._parse_fileext_torrents(soup, url)
+        if torrents:
+            return torrents
+
+        print("[SCRAPER] No data-fileext torrents — falling back to magnet links")
+        torrents = self._parse_magnet_torrents(soup, url)
+        if torrents:
+            return torrents
+
+        print("[SCRAPER] No magnet links — falling back to ipsAttachLink format")
+        return self._parse_ipsattachlink_torrents(soup, url)
+
+    def extract_torrents_by_fileext(self, url: str) -> List[Dict]:
+        """
+        Backwards-compatible entry point. Now runs the full fallback chain
+        (data-fileext → magnet → ipsAttachLink) so existing callers keep
+        working on older posts too.
+        """
+        return self.extract_all_torrents(url)
+
     def extract_links_with_ipshover(self, url: str) -> List[Dict]:
         """
         Extract forum links with data-ipshover attributes
@@ -193,11 +332,19 @@ class WebScraper:
                         print(f"[SCRAPER] Total pages detected: {total}")
                         return total
 
-                # Redundant fallback: page-jump input max attribute
+                # Fallback: page-jump form input max attribute (max='97')
                 page_input = pagination.find('input', attrs={'max': True})
                 if page_input and str(page_input.get('max', '')).strip().isdigit():
                     total = int(str(page_input['max']).strip())
                     print(f"[SCRAPER] Total pages from input max: {total}")
+                    return total
+
+                # Last-resort fallback: parse the "Page 1 of 97" jump label text.
+                m = re.search(r'Page\s+\d+\s+of\s+(\d+)',
+                              pagination.get_text(' ', strip=True), re.IGNORECASE)
+                if m:
+                    total = int(m.group(1))
+                    print(f"[SCRAPER] Total pages from 'Page X of Y' text: {total}")
                     return total
 
             print("[SCRAPER] No pagination found — assuming 1 page")
@@ -212,6 +359,12 @@ class WebScraper:
         Download a torrent file
         Returns the filepath if successful
         """
+        # Magnet links are not downloadable files — they must be handed to
+        # qBittorrent directly (see MovieProcessor.download_and_add_torrent).
+        if torrent_url and torrent_url.startswith('magnet:'):
+            print(f"[SCRAPER] Skipping file download for magnet link: {filename}")
+            return None
+
         try:
             print(f"[SCRAPER] Downloading torrent: {filename or torrent_url}")
             response = requests.get(torrent_url, headers=self.headers, timeout=30)

@@ -133,17 +133,32 @@
 
                 <div class="card">
                     <p style="color:var(--text-secondary);margin-bottom:1rem;">
-                        Scans the <strong>entire forum</strong> from page 1 to the last page.
-                        Total pages are detected automatically. Each new movie goes through the
-                        normal rating/quality workflow and only <strong>1080p</strong> torrents are
-                        downloaded. Movies with multiple 1080p options will wait below for you to
-                        choose which torrent to send to qBittorrent.
+                        Builds a browsable <strong>library</strong> of every movie in the forum.
+                        Total pages are detected automatically. Nothing is downloaded to qBittorrent
+                        and nothing is added to Radarr automatically — each movie is catalogued with
+                        its poster, rating and its <strong>1080p</strong> torrent file(s) ready to go.
+                        Movies already in your library are skipped, so re-running or resuming is safe.
+                        Use a movie's buttons below to send a torrent to qBittorrent, add it to Radarr,
+                        or move it into your normal movie list.
                     </p>
                     <div style="display:flex;gap:0.75rem;flex-wrap:wrap;align-items:center;">
-                        <button id="btn-start-full-scan" class="btn-primary">▶ Start Full Scan</button>
+                        <label style="font-size:0.85rem;color:var(--text-secondary);">From page
+                            <input id="full-scan-start-page" type="number" min="1" value="1"
+                                   style="width:5rem;margin-left:0.35rem;" placeholder="1">
+                        </label>
+                        <label style="font-size:0.85rem;color:var(--text-secondary);">to page
+                            <input id="full-scan-end-page" type="number" min="1" value=""
+                                   style="width:5rem;margin-left:0.35rem;" placeholder="last">
+                        </label>
+                        <button id="btn-start-full-scan" class="btn-primary">▶ Start Scan</button>
                         <button id="btn-cancel-full-scan" class="btn-danger" style="display:none;">■ Cancel Scan</button>
+                        <button id="btn-delete-all-full-scan" class="btn-danger">🗑 Delete All</button>
                         <span id="full-scan-status-text" style="color:var(--text-secondary);font-size:0.9rem;"></span>
                     </div>
+                    <p style="color:var(--text-secondary);font-size:0.8rem;margin-top:0.6rem;">
+                        Leave “to page” blank to scan to the very last page. To <strong>resume</strong> an
+                        interrupted scan, set “From page” to where it stopped (shown after a scan).
+                    </p>
 
                     <!-- Progress bar (pages) -->
                     <div id="full-scan-progress-wrap" style="display:none;margin-top:1.25rem;">

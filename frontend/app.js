@@ -480,6 +480,11 @@ function displayMovies(movies, containerId = 'movies-list') {
             ? `<button class="btn-secondary btn-add-radarr" data-id="${movie.id}" title="Add to Radarr">+ Radarr</button>`
             : '';
 
+        // Forum-library movies can be promoted into the normal movie list.
+        const promoteBtn = movie.source === 'full_scan'
+            ? `<button class="btn-secondary btn-promote" data-id="${movie.id}" title="Move into your normal movie list">&#x2192; My Movies</button>`
+            : '';
+
         const downloadBtn = !movie.is_downloaded
             ? `<button class="btn-primary btn-download" data-id="${movie.id}">Download</button>`
             : '';
@@ -531,6 +536,7 @@ function displayMovies(movies, containerId = 'movies-list') {
                         data-imdbid="${movie.imdb_id || ''}"
                         title="Correct movie info">&#x270F; Edit</button>
                     ${addRadarrBtn}
+                    ${promoteBtn}
                     <button class="btn-danger btn-delete" data-id="${movie.id}">&#x1F5D1;</button>
                 </div>
             </div>
@@ -608,6 +614,15 @@ function displayMovies(movies, containerId = 'movies-list') {
         });
     });
 
+    // Reload whichever grid this card belongs to (Movies page vs library).
+    const reloadGrid = async () => {
+        if (containerId === 'forum-movies-list') {
+            await loadForumMovies();
+        } else {
+            await loadMovies();
+        }
+    };
+
     // ── Add to Radarr ────────────────────────────────────────────────
     container.querySelectorAll('.btn-add-radarr').forEach(btn => {
         btn.addEventListener('click', async e => {
@@ -619,10 +634,29 @@ function displayMovies(movies, containerId = 'movies-list') {
                 const res  = await apiCall(`/api/movies/${movieId}/add-to-radarr`, { method: 'POST' });
                 const data = await res.json();
                 showToast(data.message, data.success ? 'success' : 'error');
-                if (data.success) await loadMovies();
+                if (data.success) await reloadGrid();
             } catch (err) {
                 showToast('Error adding to Radarr', 'error');
                 b.textContent = '+ Radarr';
+                b.disabled = false;
+            }
+        });
+    });
+
+    // ── Move to normal movie list (promote out of the forum library) ──
+    container.querySelectorAll('.btn-promote').forEach(btn => {
+        btn.addEventListener('click', async e => {
+            const b = e.target;
+            const movieId = b.dataset.id;
+            b.disabled = true;
+            try {
+                const res  = await apiCall(`/api/movies/${movieId}/promote`, { method: 'POST' });
+                const data = await res.json();
+                showToast(data.message || (res.ok ? 'Moved' : 'Failed'),
+                          res.ok ? 'success' : 'error');
+                if (res.ok) await reloadGrid();
+            } catch (err) {
+                showToast('Error moving movie', 'error');
                 b.disabled = false;
             }
         });
@@ -633,6 +667,7 @@ function displayMovies(movies, containerId = 'movies-list') {
         btn.addEventListener('click', async e => {
             if (confirm('Are you sure you want to delete this movie?')) {
                 await deleteMovie(e.target.dataset.id);
+                if (containerId === 'forum-movies-list') await loadForumMovies();
             }
         });
     });
@@ -1606,18 +1641,27 @@ async function refreshFullScanStatus() {
         if (s.total_pages > 0 || running) {
             wrap.style.display = 'block';
             const total   = s.total_pages || 0;
+            const startP  = s.scan_start_page || 1;
+            const endP    = s.scan_end_page || total;
             const current = s.current_page || 0;
-            const percent = total > 0 ? Math.round((current / total) * 100) : 0;
-            label.textContent = `Page ${current} of ${total}`;
+            // Progress is measured within the requested page range.
+            const span    = Math.max(1, (endP - startP + 1));
+            const done    = Math.max(0, Math.min(span, current - startP + 1));
+            const percent = Math.round((done / span) * 100);
+            label.textContent = `Page ${current} of ${endP}` +
+                (startP > 1 ? ` (range ${startP}–${endP} of ${total})` : ` of ${total}`);
             pct.textContent = `${percent}%`;
             fill.style.width = `${percent}%`;
 
             stats.innerHTML = `
-                <span>🆕 New movies found: <strong>${s.movies_found ?? 0}</strong></span>
-                <span>✅ Processed: <strong>${s.movies_processed ?? 0}</strong></span>
-                <span>⇄ Needs action: <strong>${s.needs_action ?? 0}</strong></span>
-                <span>⚠ Failed: <strong>${s.movies_failed ?? 0}</strong></span>
-                <span>⏭ Already in DB: <strong>${s.skipped_existing ?? 0}</strong></span>
+                <span>🔗 Links seen: <strong>${s.links_seen ?? 0}</strong></span>
+                <span>🆕 New in library: <strong>${s.cataloged ?? 0}</strong></span>
+                <span>📭 No torrent file: <strong>${s.no_torrents ?? 0}</strong></span>
+                <span>⏭ Already in library: <strong>${s.skipped_existing ?? 0}</strong></span>
+                <span title="Links that aren't movie posts (no year) — forum nav, categories, user links">🚮 Not a movie: <strong>${s.not_a_movie ?? 0}</strong></span>
+                ${s.pages_retried ? `<span>🔁 Pages recovered: <strong>${s.pages_retried}</strong></span>` : ''}
+                ${s.pages_failed ? `<span style="color:var(--danger-color);">🚫 Pages skipped: <strong>${s.pages_failed}</strong></span>` : ''}
+                ${s.last_movie ? `<span style="flex-basis:100%;">🎬 Last movie: <strong>${escapeHtml(s.last_movie)}</strong></span>` : ''}
             `;
         }
 
@@ -1642,9 +1686,27 @@ async function refreshFullScanStatus() {
 }
 
 document.getElementById('btn-start-full-scan').addEventListener('click', async () => {
-    if (!confirm('Scan the ENTIRE forum from page 1 to the last page? This can take a long time.')) return;
+    const startEl = document.getElementById('full-scan-start-page');
+    const endEl   = document.getElementById('full-scan-end-page');
+    const startPage = parseInt(startEl.value) || 1;
+    const endPage   = endEl.value.trim() ? parseInt(endEl.value) : null;
+
+    if (endPage !== null && endPage < startPage) {
+        showToast('“To page” must be greater than or equal to “From page”.', 'error');
+        return;
+    }
+
+    const rangeMsg = endPage
+        ? `pages ${startPage} to ${endPage}`
+        : `from page ${startPage} to the last page`;
+    if (!confirm(`Build the forum library by scanning ${rangeMsg}? ` +
+                 `Movies already in your library are skipped.`)) return;
+
     try {
-        const response = await apiCall('/api/movies/full-scan', { method: 'POST' });
+        const response = await apiCall('/api/movies/full-scan', {
+            method: 'POST',
+            body: JSON.stringify({ start_page: startPage, end_page: endPage })
+        });
         const data = await response.json();
         if (response.ok) {
             showToast(data.message, 'success');
@@ -1656,6 +1718,26 @@ document.getElementById('btn-start-full-scan').addEventListener('click', async (
         }
     } catch (error) {
         showToast('Error starting full scan', 'error');
+        console.error(error);
+    }
+});
+
+document.getElementById('btn-delete-all-full-scan').addEventListener('click', async () => {
+    if (!confirm('Delete ALL movies in the forum library? ' +
+                 'Movies you have moved to your normal list or added to Radarr are NOT affected. ' +
+                 'This lets you rebuild the library from scratch.')) return;
+    try {
+        const response = await apiCall('/api/movies/full-scan/all', { method: 'DELETE' });
+        const data = await response.json();
+        showToast(data.message || 'Library cleared', response.ok ? 'success' : 'error');
+        if (response.ok) {
+            // Reset the page-range inputs back to a fresh full scan.
+            document.getElementById('full-scan-start-page').value = '1';
+            document.getElementById('full-scan-end-page').value = '';
+            await loadForumMovies();
+        }
+    } catch (error) {
+        showToast('Error clearing library', 'error');
         console.error(error);
     }
 });
